@@ -70,6 +70,9 @@ export type ScheduledLeg = NormalizedDirectionsLeg & {
   dayISO: string;
   bufferSec: number;
   kind?: LegKind;
+  // When a nonstop drive crosses midnight, the schedule is split at 00:00.
+  // Only the final chunk actually arrives at the destination place.
+  arrivesAtDestination?: boolean;
 };
 
 export type DayItinerary = {

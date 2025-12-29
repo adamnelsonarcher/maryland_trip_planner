@@ -33,7 +33,9 @@ function computeBasePlaceByDay(itinerary: DayItinerary[], scenario: Scenario): R
     map[day.dayISO] = current;
     if (day.legs.length > 0) {
       // Legs are assigned to their arrival day; assume arrival at each leg's destination.
-      for (const leg of day.legs) current = leg.toPlaceId;
+      for (const leg of day.legs) {
+        if (leg.arrivesAtDestination !== false) current = leg.toPlaceId;
+      }
     }
   }
   return map;
