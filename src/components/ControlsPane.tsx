@@ -270,12 +270,12 @@ export function ControlsPane({
                 type="number"
                 min={0}
                 step={1}
-                value={scenario.settings.originStayDays}
+                value={scenario.settings.originStayDays ?? 0}
                 onChange={(e) =>
                   onUpdateScenario({
                     settings: {
                       ...scenario.settings,
-                      originStayDays: Number(e.target.value),
+                      originStayDays: Number(e.target.value || 0),
                     },
                   })
                 }

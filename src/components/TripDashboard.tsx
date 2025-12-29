@@ -10,6 +10,7 @@ import { decodeShareStateV1, encodeShareStateV1 } from "@/lib/share";
 import { clearTripLocalStorage, loadTripFromLocalStorage, saveTripToLocalStorage } from "@/lib/storage";
 import { computeItinerary } from "@/lib/scheduler";
 import { normalizeDirectionsResponse } from "@/lib/directions";
+import { normalizeTrip } from "@/lib/normalizeTrip";
 import type { NormalizedDirectionsLeg, Place, Scenario, Trip } from "@/types/trip";
 import { ControlsPane } from "@/components/ControlsPane";
 import { MapView } from "@/components/MapView";
@@ -130,13 +131,13 @@ export function TripDashboard() {
     if (s) {
       const fromUrl = decodeShareStateV1(s);
       if (fromUrl) {
-        setTrip(fromUrl);
+        setTrip(normalizeTrip(fromUrl));
         return;
       }
     }
 
     const fromStorage = loadTripFromLocalStorage();
-    if (fromStorage) setTrip(fromStorage);
+    if (fromStorage) setTrip(normalizeTrip(fromStorage));
   }, []);
 
   // Persist to localStorage (debounced-ish).
