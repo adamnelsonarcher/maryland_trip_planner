@@ -32,7 +32,7 @@ export function makeDefaultTrip(): Trip {
   });
 
   const lakeHouse = place({
-    name: "Western MD Lake House (placeholder)",
+    name: "Lake House",
     address: "Western Maryland (lake house address TBD)",
     location: { lat: 39.5937, lng: -79.2673 }, // Roughly Deep Creek Lake area
     tags: ["lodging", "anchor"],

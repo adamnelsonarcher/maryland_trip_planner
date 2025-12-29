@@ -114,6 +114,8 @@ export function TripDashboard() {
   const [resolvedResponse, setResolvedResponse] = useState<google.maps.DirectionsResult | null>(null);
   const [resolvedLegs, setResolvedLegs] = useState<NormalizedDirectionsLeg[]>([]);
   const [resolvedError, setResolvedError] = useState<string | null>(null);
+  const [itineraryView, setItineraryView] = useState<"overview" | "day">("overview");
+  const [selectedDayISO, setSelectedDayISO] = useState<string>(() => makeDefaultTrip().startDateISO);
 
   const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? "";
   const { isLoaded, loadError } = useJsApiLoader({
@@ -280,6 +282,13 @@ export function TripDashboard() {
     return computeItinerary({ trip, scenario, legs: directions.legs });
   }, [trip, scenario, directions]);
 
+  useEffect(() => {
+    // Keep selection valid if the trip window changes.
+    if (!itinerary.days.some((d) => d.dayISO === selectedDayISO)) {
+      setSelectedDayISO(itinerary.days[0]?.dayISO ?? trip.startDateISO);
+    }
+  }, [itinerary.days, selectedDayISO, trip.startDateISO]);
+
   const shareUrl = useMemo(() => {
     if (!mounted) return "";
     const s = encodeShareStateV1(trip);
@@ -302,6 +311,11 @@ export function TripDashboard() {
           onUpsertPlace={(p) => setTrip((t) => upsertPlace(t, p))}
           onReset={() => {
             clearTripLocalStorage();
+            if (typeof window !== "undefined") {
+              const u = new URL(window.location.href);
+              u.searchParams.delete("s");
+              window.history.replaceState({}, "", u.toString());
+            }
             setTrip(makeDefaultTrip());
           }}
           shareUrl={shareUrl}
@@ -313,6 +327,9 @@ export function TripDashboard() {
           isMapsLoaded={isLoaded}
           directions={directions.status === "ready" ? directions.responses : []}
           placeIdsInOrder={placeIdsInOrder}
+          itinerary={itinerary.days}
+          view={itineraryView}
+          selectedDayISO={selectedDayISO}
         />
 
         <ItineraryView
@@ -320,6 +337,10 @@ export function TripDashboard() {
           scenario={scenario}
           itinerary={itinerary.days}
           onUpdateScenario={(patch) => setTrip((t) => updateScenario(t, scenario.id, patch))}
+          view={itineraryView}
+          selectedDayISO={selectedDayISO}
+          onChangeView={setItineraryView}
+          onChangeSelectedDayISO={setSelectedDayISO}
         />
       </div>
     </div>

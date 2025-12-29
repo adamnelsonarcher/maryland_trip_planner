@@ -67,6 +67,10 @@ export type ScheduledLeg = NormalizedDirectionsLeg & {
   arriveAtISO: string;
   dayISO: string;
   bufferSec: number;
+  // If a Directions leg is split across multiple days, each scheduled chunk will include part info.
+  partIndex?: number; // 1-based
+  partCount?: number; // total parts for this original leg
+  isSplitChunk?: boolean;
 };
 
 export type DayItinerary = {

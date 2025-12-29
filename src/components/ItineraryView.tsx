@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import type { DayItinerary, Scenario, Trip } from "@/types/trip";
 import { DayCard } from "@/components/DayCard";
@@ -12,12 +12,22 @@ type Props = {
   scenario: Scenario;
   itinerary: DayItinerary[];
   onUpdateScenario: (patch: Partial<Scenario>) => void;
+  view: "overview" | "day";
+  selectedDayISO: string;
+  onChangeView: (view: "overview" | "day") => void;
+  onChangeSelectedDayISO: (dayISO: string) => void;
 };
 
-export function ItineraryView({ trip, scenario, itinerary, onUpdateScenario }: Props) {
-  const [view, setView] = useState<"overview" | "day">("overview");
-  const [selectedDayISO, setSelectedDayISO] = useState<string>(() => itinerary[0]?.dayISO ?? trip.startDateISO);
-
+export function ItineraryView({
+  trip,
+  scenario,
+  itinerary,
+  onUpdateScenario,
+  view,
+  selectedDayISO,
+  onChangeView,
+  onChangeSelectedDayISO,
+}: Props) {
   const selectedDay = useMemo(
     () => itinerary.find((d) => d.dayISO === selectedDayISO) ?? itinerary[0],
     [itinerary, selectedDayISO],
@@ -47,13 +57,13 @@ export function ItineraryView({ trip, scenario, itinerary, onUpdateScenario }: P
             <div className="inline-flex rounded-md border border-zinc-200 bg-white">
               <button
                 className={`px-3 py-1.5 text-sm ${view === "overview" ? "bg-zinc-900 text-white" : "hover:bg-zinc-50"}`}
-                onClick={() => setView("overview")}
+                onClick={() => onChangeView("overview")}
               >
                 Overview
               </button>
               <button
                 className={`px-3 py-1.5 text-sm ${view === "day" ? "bg-zinc-900 text-white" : "hover:bg-zinc-50"}`}
-                onClick={() => setView("day")}
+                onClick={() => onChangeView("day")}
               >
                 Day
               </button>
@@ -62,7 +72,7 @@ export function ItineraryView({ trip, scenario, itinerary, onUpdateScenario }: P
             <select
               className="rounded-md border border-zinc-200 bg-white px-2 py-1.5 text-sm"
               value={selectedDayISO}
-              onChange={(e) => setSelectedDayISO(e.target.value)}
+              onChange={(e) => onChangeSelectedDayISO(e.target.value)}
             >
               {itinerary.map((d) => (
                 <option key={d.dayISO} value={d.dayISO}>

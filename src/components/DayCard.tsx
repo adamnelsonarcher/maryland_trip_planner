@@ -45,12 +45,17 @@ export function DayCard({ trip, day }: Props) {
             const to = trip.placesById[leg.toPlaceId]?.name ?? "Unknown";
             const depart = new Date(leg.departAtISO);
             const arrive = new Date(leg.arriveAtISO);
+            const partLabel =
+              leg.isSplitChunk && leg.partIndex && leg.partCount
+                ? ` (part ${leg.partIndex}/${leg.partCount})`
+                : "";
             return (
               <div key={`${leg.fromPlaceId}-${leg.toPlaceId}-${idx}`} className="rounded-md bg-zinc-50 p-2">
                 <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <div className="truncate text-sm font-medium">
                       {from} → {to}
+                      {partLabel}
                     </div>
                     <div className="text-xs text-zinc-500">
                       {formatTimeShort(depart)} → {formatTimeShort(arrive)} • {fmtDuration(leg.durationSec)}
