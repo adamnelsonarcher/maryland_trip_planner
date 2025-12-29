@@ -55,17 +55,10 @@ function upsertPlace(trip: Trip, place: Place): Trip {
 }
 
 export function TripDashboard() {
-  const [trip, setTrip] = useState<Trip>(() => {
-    // Initial load: share URL state wins, then localStorage, then defaults.
-    if (typeof window === "undefined") return makeDefaultTrip();
-    const s = new URLSearchParams(window.location.search).get("s");
-    if (s) {
-      const fromUrl = decodeShareStateV1(s);
-      if (fromUrl) return fromUrl;
-    }
-    const fromStorage = loadTripFromLocalStorage();
-    return fromStorage ?? makeDefaultTrip();
-  });
+  // IMPORTANT: initialize with the same value on server + first client render
+  // to avoid hydration mismatches. Then load URL/localStorage after mount.
+  const [trip, setTrip] = useState<Trip>(() => makeDefaultTrip());
+  const [mounted, setMounted] = useState(false);
 
   const [resolvedKey, setResolvedKey] = useState<string | null>(null);
   const [resolvedResponse, setResolvedResponse] = useState<google.maps.DirectionsResult | null>(null);
@@ -80,11 +73,29 @@ export function TripDashboard() {
 
   const requestSeq = useRef(0);
 
+  // After mount: hydrate state from URL/localStorage.
+  useEffect(() => {
+    setMounted(true);
+
+    const s = new URLSearchParams(window.location.search).get("s");
+    if (s) {
+      const fromUrl = decodeShareStateV1(s);
+      if (fromUrl) {
+        setTrip(fromUrl);
+        return;
+      }
+    }
+
+    const fromStorage = loadTripFromLocalStorage();
+    if (fromStorage) setTrip(fromStorage);
+  }, []);
+
   // Persist to localStorage (debounced-ish).
   useEffect(() => {
+    if (!mounted) return;
     const t = window.setTimeout(() => saveTripToLocalStorage(trip), 400);
     return () => window.clearTimeout(t);
-  }, [trip]);
+  }, [mounted, trip]);
 
   const scenario = useMemo(() => getActiveScenario(trip), [trip]);
   const placeIdsInOrder = useMemo(() => buildPlaceOrder(trip, scenario), [trip, scenario]);
@@ -197,12 +208,12 @@ export function TripDashboard() {
   }, [trip, scenario, directions]);
 
   const shareUrl = useMemo(() => {
-    if (typeof window === "undefined") return "";
+    if (!mounted) return "";
     const s = encodeShareStateV1(trip);
     const u = new URL(window.location.href);
     u.searchParams.set("s", s);
     return u.toString();
-  }, [trip]);
+  }, [mounted, trip]);
 
   return (
     <div className="h-screen w-full bg-zinc-50 text-zinc-900">
