@@ -31,10 +31,14 @@ export function ControlsPane({
   onUpsertPlace,
   onReset,
 }: Props) {
-  const dayTripDates = Object.entries(scenario.dayOverridesByISO ?? {})
+  const dayTrips = Object.entries(scenario.dayOverridesByISO ?? {})
     .filter(([, o]) => Boolean(o.dayTrip))
     .map(([dayISO, o]) => ({ dayISO, preset: o.dayTrip!.preset }))
     .sort((a, b) => a.dayISO.localeCompare(b.dayISO));
+
+  const nycDays = dayTrips.filter((d) => d.preset === "NYC").map((d) => formatDateShort(d.dayISO));
+  const paDays = dayTrips.filter((d) => d.preset === "PA").map((d) => formatDateShort(d.dayISO));
+  const customDays = dayTrips.filter((d) => d.preset === "CUSTOM").map((d) => formatDateShort(d.dayISO));
 
   return (
     <aside className="border-r border-zinc-200 bg-white h-full overflow-y-auto">
@@ -161,20 +165,26 @@ export function ControlsPane({
 
         <div className="rounded-md border border-zinc-200 p-3">
           <div className="text-sm font-semibold">Day trips</div>
-          {dayTripDates.length === 0 ? (
-            <div className="mt-2 text-sm text-zinc-500">None added yet.</div>
-          ) : (
-            <div className="mt-2 space-y-2">
-              {dayTripDates.map((d) => (
-                <div key={d.dayISO} className="flex items-center justify-between gap-3 rounded-md bg-zinc-50 px-2 py-2">
-                  <div className="text-sm font-medium">{formatDateShort(d.dayISO)}</div>
-                  <div className="text-xs text-zinc-600">
-                    {d.preset === "NYC" ? "NYC" : d.preset === "PA" ? "PA" : "Custom"}
-                  </div>
-                </div>
-              ))}
+          <div className="mt-2 space-y-2">
+            <div className="flex items-center justify-between gap-3 rounded-md bg-zinc-50 px-2 py-2">
+              <div className="text-sm font-medium">NYC</div>
+              <div className="text-xs text-zinc-600 text-right">
+                {nycDays.length > 0 ? nycDays.join(", ") : "not in trip"}
+              </div>
             </div>
-          )}
+            <div className="flex items-center justify-between gap-3 rounded-md bg-zinc-50 px-2 py-2">
+              <div className="text-sm font-medium">PA</div>
+              <div className="text-xs text-zinc-600 text-right">
+                {paDays.length > 0 ? paDays.join(", ") : "not in trip"}
+              </div>
+            </div>
+            {customDays.length > 0 ? (
+              <div className="flex items-center justify-between gap-3 rounded-md bg-zinc-50 px-2 py-2">
+                <div className="text-sm font-medium">Custom</div>
+                <div className="text-xs text-zinc-600 text-right">{customDays.join(", ")}</div>
+              </div>
+            ) : null}
+          </div>
           <div className="mt-2 text-xs text-zinc-500">Add/edit day trips from the Day view.</div>
         </div>
 
