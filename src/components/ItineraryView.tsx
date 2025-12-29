@@ -51,6 +51,8 @@ export function ItineraryView({
 
   const [addOpen, setAddOpen] = useState(false);
   const [addDayISO, setAddDayISO] = useState<string | null>(null);
+  const [addDriveStartPlaceId, setAddDriveStartPlaceId] = useState<string | null>(null);
+  const [addDriveSuggestedEndPlaceId, setAddDriveSuggestedEndPlaceId] = useState<string | null>(null);
   const selectedDay = useMemo(
     () => itinerary.find((d) => d.dayISO === selectedDayISO) ?? itinerary[0],
     [itinerary, selectedDayISO],
@@ -68,7 +70,7 @@ export function ItineraryView({
   const dayTripStart = override?.dayTrip?.startPlaceId ?? "";
   const dayTripEnd = override?.dayTrip?.endPlaceId ?? "";
   const dayTripDest = override?.dayTrip?.destinationPlaceId ?? "";
-  const dwellMinutes = override?.dayTrip?.dwellMinutes ?? 120;
+  const dwellMinutes = override?.dayTrip?.dwellMinutes ?? 360;
   const dwellBlocks: DwellBlock[] = override?.dwellBlocks ?? [];
 
   const tripPlaceOptions = useMemo(() => {
@@ -109,7 +111,7 @@ export function ItineraryView({
       const name = trip.placesById[placeId]?.name ?? "stop";
       const nextOverrides = { ...(scenario.dayOverridesByISO ?? {}) };
       const existing = nextOverrides[dayISO] ?? { mode: "auto" as const, dwellBlocks: [] as DwellBlock[] };
-      const block: DwellBlock = { id: nanoid(), placeId, minutes: 120, label: `Time at ${name}` };
+      const block: DwellBlock = { id: nanoid(), placeId, minutes: 90, label: `Time at ${name}` };
       nextOverrides[dayISO] = { ...existing, dwellBlocks: [...(existing.dwellBlocks ?? []), block] };
       onUpdateScenario({ dayOverridesByISO: nextOverrides });
 
@@ -121,8 +123,10 @@ export function ItineraryView({
     }
   };
 
-  const openAddAtDay = (dayISO: string) => {
+  const openAddAtDay = (dayISO: string, ctx?: { driveStartPlaceId?: string; suggestedEndPlaceId?: string }) => {
     setAddDayISO(dayISO);
+    setAddDriveStartPlaceId(ctx?.driveStartPlaceId ?? null);
+    setAddDriveSuggestedEndPlaceId(ctx?.suggestedEndPlaceId ?? null);
     setAddOpen(true);
   };
 
@@ -223,7 +227,7 @@ export function ItineraryView({
                         ...existing,
                         dayTrip: {
                           preset: v,
-                          dwellMinutes: existing.dayTrip?.dwellMinutes ?? 120,
+                          dwellMinutes: existing.dayTrip?.dwellMinutes ?? 360,
                           startPlaceId: existing.dayTrip?.startPlaceId,
                           endPlaceId: existing.dayTrip?.endPlaceId,
                           destinationPlaceId: existing.dayTrip?.destinationPlaceId,
@@ -332,7 +336,7 @@ export function ItineraryView({
                       onChange={(e) => {
                         const nextOverrides = { ...(scenario.dayOverridesByISO ?? {}) };
                         const existing = nextOverrides[selectedDayISO] ?? { mode: "auto" as const };
-                        const dt = existing.dayTrip ?? { preset: dayTripPreset as PresetDayTrip, dwellMinutes: 120 };
+                            const dt = existing.dayTrip ?? { preset: dayTripPreset as PresetDayTrip, dwellMinutes: 360 };
                         nextOverrides[selectedDayISO] = {
                           ...existing,
                           dayTrip: { ...dt, dwellMinutes: Number(e.target.value || 0) },
@@ -401,7 +405,7 @@ export function ItineraryView({
                           const existing = nextOverrides[selectedDayISO] ?? { mode: "auto" as const };
                           const nextBlocks: DwellBlock[] = [
                             ...(existing.dwellBlocks ?? []),
-                            { id: nanoid(), placeId: baseId, minutes: 120, label: "Time spent" },
+                            { id: nanoid(), placeId: baseId, minutes: 90, label: "Time spent" },
                           ];
                           nextOverrides[selectedDayISO] = { ...existing, dwellBlocks: nextBlocks };
                           onUpdateScenario({ dayOverridesByISO: nextOverrides });
@@ -447,12 +451,23 @@ export function ItineraryView({
                   onInsertBetween={(dayISO, idx) => {
                     const prev = day.legs[idx - 1];
                     const next = day.legs[idx];
-                    const drive = [prev, next].find((l) => l && l.eventType !== "dwell");
-                    if (drive) {
-                      onLegClick?.(drive);
+                    const prevIsDwell = prev?.eventType === "dwell";
+                    const nextIsDwell = next?.eventType === "dwell";
+                    const nextDrive = next && next.eventType !== "dwell" ? next : undefined;
+
+                    // If we're inserting adjacent to a "time at ..." block, treat it as "add a new drive" (day trip),
+                    // rather than "add a stop to an existing drive".
+                    if (prevIsDwell || nextIsDwell) {
+                      const driveStart = (prev ?? next)?.toPlaceId ?? baseByDay[dayISO];
+                      const suggestedEnd = nextDrive?.toPlaceId;
+                      openAddAtDay(dayISO, { driveStartPlaceId: driveStart, suggestedEndPlaceId: suggestedEnd });
                       return;
                     }
-                    openAddAtDay(dayISO);
+
+                    // Otherwise, between two drives: clicking "+" means "add a stop" to one of the adjacent drives.
+                    const drive = [prev, next].find((l) => l && l.eventType !== "dwell");
+                    if (drive) onLegClick?.(drive);
+                    else openAddAtDay(dayISO);
                   }}
                 />
               );
@@ -483,12 +498,20 @@ export function ItineraryView({
               onInsertBetween={(dayISO, idx) => {
                 const prev = selectedDay.legs[idx - 1];
                 const next = selectedDay.legs[idx];
-                const drive = [prev, next].find((l) => l && l.eventType !== "dwell");
-                if (drive) {
-                  onLegClick?.(drive);
+                const prevIsDwell = prev?.eventType === "dwell";
+                const nextIsDwell = next?.eventType === "dwell";
+                const nextDrive = next && next.eventType !== "dwell" ? next : undefined;
+
+                if (prevIsDwell || nextIsDwell) {
+                  const driveStart = (prev ?? next)?.toPlaceId ?? baseByDay[dayISO];
+                  const suggestedEnd = nextDrive?.toPlaceId;
+                  openAddAtDay(dayISO, { driveStartPlaceId: driveStart, suggestedEndPlaceId: suggestedEnd });
                   return;
                 }
-                openAddAtDay(dayISO);
+
+                const drive = [prev, next].find((l) => l && l.eventType !== "dwell");
+                if (drive) onLegClick?.(drive);
+                else openAddAtDay(dayISO);
               }}
             />
           ) : null}
@@ -557,7 +580,14 @@ export function ItineraryView({
           const existing = nextOverrides[addDayISO] ?? { mode: "auto" as const, dwellBlocks: [] as DwellBlock[] };
           nextOverrides[addDayISO] = {
             ...existing,
-            dayTrip: existing.dayTrip ?? { preset: "CUSTOM" as const, dwellMinutes: 120 },
+            dayTrip:
+              existing.dayTrip ??
+              ({
+                preset: "CUSTOM" as const,
+                dwellMinutes: 360,
+                startPlaceId: addDriveStartPlaceId ?? undefined,
+                endPlaceId: addDriveSuggestedEndPlaceId ?? undefined,
+              } as const),
           };
           onUpdateScenario({ dayOverridesByISO: nextOverrides });
         }}

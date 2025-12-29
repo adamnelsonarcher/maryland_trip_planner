@@ -33,7 +33,7 @@ function normalizeScenario(trip: Trip, scenario: Scenario): Scenario {
     if (o.presetDayTrip && !o.dayTrip) {
       normalized.dayOverridesByISO![dayISO] = {
         ...o,
-        dayTrip: { preset: o.presetDayTrip, dwellMinutes: 120 },
+        dayTrip: { preset: o.presetDayTrip, dwellMinutes: 360 },
       };
       // Keep presetDayTrip for backward compat, but dayTrip becomes the source of truth.
     }

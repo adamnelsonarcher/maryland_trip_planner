@@ -64,7 +64,7 @@ export function AddEventModal({
               onClick={() => {
                 if (!basePlaceName) return;
                 // placeId is filled by parent (base location id); this is just the template.
-                onAddTimeAtBase({ id: nanoid(), placeId: "__BASE__", minutes: 120, label: `Time in ${basePlaceName}` });
+                onAddTimeAtBase({ id: nanoid(), placeId: "__BASE__", minutes: 90, label: `Time in ${basePlaceName}` });
                 onClose();
               }}
             >
@@ -79,12 +79,12 @@ export function AddEventModal({
                 isMapsLoaded={isMapsLoaded}
                 placeholder="Search a place…"
                 onPlaceSelected={(p) => {
-                  onAddTimeAtPlace(p, 120);
+                  onAddTimeAtPlace(p, 90);
                   onClose();
                 }}
               />
             </div>
-            <div className="mt-2 text-xs text-zinc-500">Defaults to 120 minutes (editable after).</div>
+            <div className="mt-2 text-xs text-zinc-500">Defaults to 90 minutes (editable after).</div>
           </div>
         </div>
       </div>

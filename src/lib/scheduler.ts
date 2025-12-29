@@ -164,6 +164,8 @@ function scheduleLegsForward(params: {
 }): { endDayIdx: number; endDepartAfter: Date; spills: boolean } {
   const { dayStartTimeHHMM, scenario, days, startDayIdx, startDepart, legs, bufferSec, kind } = params;
 
+  const DEFAULT_DWELL_AFTER_ARRIVAL_SEC = 90 * 60;
+
   let dayIdx = startDayIdx;
   let depart = startDepart ?? makeLocalDateTime(days[dayIdx]!.dayISO, dayStartTimeHHMM);
 
@@ -192,6 +194,10 @@ function scheduleLegsForward(params: {
     const res = scheduleOneLegMidnightSplit({ days, scenario, depart, leg, bufferSec, kind });
     if (res.spills) return { endDayIdx: dayIdx, endDepartAfter: depart, spills: true };
 
+    // Special-case: the final leg of the drive home ends the trip.
+    // Don't create any "Time at Houston" (or other terminal destination) dwell card.
+    const isTerminalReturnArrival = kind === "home" && legIdx === legs.length - 1;
+
     // After arriving at the destination for this leg, insert:
     // - Any explicit dwellBlocks for that stop (editable/saved)
     // - Otherwise, an implicit "Time at ..." placeholder card (click to set minutes)
@@ -200,60 +206,68 @@ function scheduleLegsForward(params: {
     let insertedAnyForPlace = false;
 
     let dwellSecTotal = 0;
-    for (const b of blocks) {
-      if (usedBlockIds.has(b.id)) continue;
-      if (b.placeId !== leg.toPlaceId) continue;
-      const sec = Math.max(0, Math.round(b.minutes * 60));
-      // Allow 0-minute blocks to exist in data, but don't schedule them as events.
-      if (sec <= 0) {
+    if (!isTerminalReturnArrival) {
+      for (const b of blocks) {
+        if (usedBlockIds.has(b.id)) continue;
+        if (b.placeId !== leg.toPlaceId) continue;
+        const sec = Math.max(0, Math.round(b.minutes * 60));
+        // Allow 0-minute blocks to exist in data, but don't schedule them as events.
+        if (sec <= 0) {
+          usedBlockIds.add(b.id);
+          insertedAnyForPlace = true;
+          continue;
+        }
+
+        const dwellStart = new Date(res.arriveAt.getTime() + dwellSecTotal * 1000);
+        const dwellEnd = new Date(dwellStart.getTime() + sec * 1000);
+        const dwell: ScheduledLeg = {
+          fromPlaceId: b.placeId,
+          toPlaceId: b.placeId,
+          durationSec: sec,
+          distanceMeters: 0,
+          departAtISO: dwellStart.toISOString(),
+          arriveAtISO: dwellEnd.toISOString(),
+          dayISO: arriveDayISO,
+          bufferSec: 0,
+          kind: "other",
+          arrivesAtDestination: true,
+          eventType: "dwell",
+          label: b.label,
+          dwellSource: { type: "dwellBlock", blockId: b.id },
+        };
+        pushChunk(days, arriveDayISO, dwell);
         usedBlockIds.add(b.id);
         insertedAnyForPlace = true;
-        continue;
+        dwellSecTotal += sec;
       }
 
-      const dwellStart = new Date(res.arriveAt.getTime() + dwellSecTotal * 1000);
-      const dwellEnd = new Date(dwellStart.getTime() + sec * 1000);
-      const dwell: ScheduledLeg = {
-        fromPlaceId: b.placeId,
-        toPlaceId: b.placeId,
-        durationSec: sec,
-        distanceMeters: 0,
-        departAtISO: dwellStart.toISOString(),
-        arriveAtISO: dwellEnd.toISOString(),
-        dayISO: arriveDayISO,
-        bufferSec: 0,
-        kind: "other",
-        arrivesAtDestination: true,
-        eventType: "dwell",
-        label: b.label,
-        dwellSource: { type: "dwellBlock", blockId: b.id },
-      };
-      pushChunk(days, arriveDayISO, dwell);
-      usedBlockIds.add(b.id);
-      insertedAnyForPlace = true;
-      dwellSecTotal += sec;
-    }
-
-    if (!insertedAnyForPlace) {
-      const at: ScheduledLeg = {
-        fromPlaceId: leg.toPlaceId,
-        toPlaceId: leg.toPlaceId,
-        durationSec: 0,
-        distanceMeters: 0,
-        departAtISO: res.arriveAt.toISOString(),
-        arriveAtISO: res.arriveAt.toISOString(),
-        dayISO: arriveDayISO,
-        bufferSec: 0,
-        kind: "other",
-        arrivesAtDestination: true,
-        eventType: "dwell",
-        dwellSource: { type: "implicitArrival" },
-      };
-      pushChunk(days, arriveDayISO, at);
+      if (!insertedAnyForPlace) {
+        const sec = DEFAULT_DWELL_AFTER_ARRIVAL_SEC;
+        const dwellStart = new Date(res.arriveAt.getTime());
+        const dwellEnd = new Date(dwellStart.getTime() + sec * 1000);
+        const at: ScheduledLeg = {
+          fromPlaceId: leg.toPlaceId,
+          toPlaceId: leg.toPlaceId,
+          durationSec: sec,
+          distanceMeters: 0,
+          departAtISO: dwellStart.toISOString(),
+          arriveAtISO: dwellEnd.toISOString(),
+          dayISO: arriveDayISO,
+          bufferSec: 0,
+          kind: "other",
+          arrivesAtDestination: true,
+          eventType: "dwell",
+          dwellSource: { type: "implicitArrival" },
+        };
+        pushChunk(days, arriveDayISO, at);
+        dwellSecTotal += sec;
+      }
     }
 
     // Next drive can depart after: arrival + dwell + buffer
-    depart = new Date(res.arriveAt.getTime() + dwellSecTotal * 1000 + bufferSec * 1000);
+    depart = isTerminalReturnArrival
+      ? res.departAfter
+      : new Date(res.arriveAt.getTime() + dwellSecTotal * 1000 + bufferSec * 1000);
     const nextIdx = days.findIndex((d) => d.dayISO === dateISOFromDate(depart));
     if (nextIdx >= 0) dayIdx = Math.max(dayIdx, nextIdx);
   }

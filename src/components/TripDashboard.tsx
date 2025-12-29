@@ -37,6 +37,15 @@ type DirectionsState =
     }
   | { status: "error"; message: string };
 
+function toLocalInputDateTime(d: Date) {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
+}
+
 function findPresetPlaceId(trip: Trip, preset: "NYC" | "PA"): string | undefined {
   if (preset === "NYC") {
     return Object.values(trip.placesById).find((p) => p.name.toLowerCase().includes("new york"))?.id;
@@ -349,7 +358,7 @@ export function TripDashboard() {
     const total = totalDrive + interLegBuffers;
     const cutoff = makeLocalDateTime(trip.endDateISO, trip.endTimeHHMM);
     const latest = new Date(cutoff.getTime() - total * 1000);
-    return latest.toISOString().slice(0, 16);
+    return toLocalInputDateTime(latest);
   }, [directions, scenario.settings.bufferMinutesPerStop, trip.endDateISO, trip.endTimeHHMM]);
 
   // Clamp user-selected return departure if it exceeds the latest allowed.
@@ -359,7 +368,7 @@ export function TripDashboard() {
     const chosen = makeLocalDateTime(trip.returnDepartDateISO, trip.returnDepartTimeHHMM);
     if (chosen.getTime() <= latest.getTime()) return;
     // Clamp to latest allowed.
-    const iso = latest.toISOString().slice(0, 16);
+    const iso = toLocalInputDateTime(latest);
     const [d, t] = iso.split("T");
     setTrip((prev) => ({ ...prev, returnDepartDateISO: d!, returnDepartTimeHHMM: t! }));
   }, [latestAllowedReturnDepartISO, trip.returnDepartDateISO, trip.returnDepartTimeHHMM]);
