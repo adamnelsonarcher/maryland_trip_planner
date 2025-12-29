@@ -1,4 +1,6 @@
-## Maryland Trip Scenario Planner
+## Trip Scenario Planner
+
+I made this tool to help a group of people plan and visualize differnt itinearies for a trip I was planning from Houston to Maryland. It features a lot of hard-coded, trip-specific logic, but could be modified to fit any trip. I may build a generalized one in the future.
 
 A Next.js (App Router) + TypeScript app for building **trip scenarios** with:
 

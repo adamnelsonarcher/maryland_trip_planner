@@ -35,6 +35,48 @@ function nextMidnight(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1, 0, 0, 0, 0);
 }
 
+function scheduleDwellMidnightSplit(params: {
+  days: DayItinerary[];
+  placeId: string;
+  start: Date;
+  durationSec: number;
+  label?: string;
+  dwellSource: ScheduledLeg["dwellSource"];
+}): Date {
+  const { days, placeId, start, durationSec, label, dwellSource } = params;
+  const totalSec = Math.max(0, durationSec);
+  const tEnd = new Date(start.getTime() + totalSec * 1000);
+  let remainingSec = totalSec;
+  let currentStart = start;
+
+  while (remainingSec > 0) {
+    const mid = nextMidnight(currentStart);
+    const chunkEnd = mid.getTime() < tEnd.getTime() ? mid : tEnd;
+    const chunkSec = Math.max(0, Math.round((chunkEnd.getTime() - currentStart.getTime()) / 1000));
+    const dayISO = dateISOFromDate(currentStart);
+    const chunk: ScheduledLeg = {
+      fromPlaceId: placeId,
+      toPlaceId: placeId,
+      durationSec: chunkSec,
+      distanceMeters: 0,
+      departAtISO: currentStart.toISOString(),
+      arriveAtISO: chunkEnd.toISOString(),
+      dayISO,
+      bufferSec: 0,
+      kind: "other",
+      arrivesAtDestination: true,
+      eventType: "dwell",
+      label,
+      dwellSource,
+    };
+    if (!pushChunk(days, dayISO, chunk)) return tEnd;
+    remainingSec -= chunkSec;
+    currentStart = chunkEnd;
+  }
+
+  return tEnd;
+}
+
 // (legacy) return start inference used to exist here; now we rely on explicit leg kinds.
 
 function isRestDay(scenario: Scenario, dayISO: string) {
@@ -165,6 +207,7 @@ function scheduleLegsForward(params: {
   const { dayStartTimeHHMM, scenario, days, startDayIdx, startDepart, legs, bufferSec, kind } = params;
 
   const DEFAULT_DWELL_AFTER_ARRIVAL_SEC = 90 * 60;
+  const annapolisId = scenario.anchorPlaceIds?.[0];
 
   let dayIdx = startDayIdx;
   let depart = startDepart ?? makeLocalDateTime(days[dayIdx]!.dayISO, dayStartTimeHHMM);
@@ -205,7 +248,7 @@ function scheduleLegsForward(params: {
     const blocks = overrides[arriveDayISO]?.dwellBlocks ?? [];
     let insertedAnyForPlace = false;
 
-    let dwellSecTotal = 0;
+    let afterArrival = res.arriveAt;
     if (!isTerminalReturnArrival) {
       for (const b of blocks) {
         if (usedBlockIds.has(b.id)) continue;
@@ -218,56 +261,41 @@ function scheduleLegsForward(params: {
           continue;
         }
 
-        const dwellStart = new Date(res.arriveAt.getTime() + dwellSecTotal * 1000);
-        const dwellEnd = new Date(dwellStart.getTime() + sec * 1000);
-        const dwell: ScheduledLeg = {
-          fromPlaceId: b.placeId,
-          toPlaceId: b.placeId,
+        const dwellEnd = scheduleDwellMidnightSplit({
+          days,
+          placeId: b.placeId,
+          start: afterArrival,
           durationSec: sec,
-          distanceMeters: 0,
-          departAtISO: dwellStart.toISOString(),
-          arriveAtISO: dwellEnd.toISOString(),
-          dayISO: arriveDayISO,
-          bufferSec: 0,
-          kind: "other",
-          arrivesAtDestination: true,
-          eventType: "dwell",
           label: b.label,
           dwellSource: { type: "dwellBlock", blockId: b.id },
-        };
-        pushChunk(days, arriveDayISO, dwell);
+        });
         usedBlockIds.add(b.id);
         insertedAnyForPlace = true;
-        dwellSecTotal += sec;
+        afterArrival = dwellEnd;
       }
 
       if (!insertedAnyForPlace) {
-        const sec = DEFAULT_DWELL_AFTER_ARRIVAL_SEC;
-        const dwellStart = new Date(res.arriveAt.getTime());
-        const dwellEnd = new Date(dwellStart.getTime() + sec * 1000);
-        const at: ScheduledLeg = {
-          fromPlaceId: leg.toPlaceId,
-          toPlaceId: leg.toPlaceId,
+        // Default: 90 minutes at each arrival. Special case: Annapolis should be a 2-night stop by default:
+        // arrive Day D, stay overnight + a full day, then depart the morning of Day D+2.
+        let sec = DEFAULT_DWELL_AFTER_ARRIVAL_SEC;
+        if (kind === "up" && annapolisId && leg.toPlaceId === annapolisId) {
+          const end = makeLocalDateTime(addDays(arriveDayISO, 2), dayStartTimeHHMM);
+          sec = Math.max(0, Math.round((end.getTime() - res.arriveAt.getTime()) / 1000));
+        }
+        afterArrival = scheduleDwellMidnightSplit({
+          days,
+          placeId: leg.toPlaceId,
+          start: afterArrival,
           durationSec: sec,
-          distanceMeters: 0,
-          departAtISO: dwellStart.toISOString(),
-          arriveAtISO: dwellEnd.toISOString(),
-          dayISO: arriveDayISO,
-          bufferSec: 0,
-          kind: "other",
-          arrivesAtDestination: true,
-          eventType: "dwell",
           dwellSource: { type: "implicitArrival" },
-        };
-        pushChunk(days, arriveDayISO, at);
-        dwellSecTotal += sec;
+        });
       }
     }
 
     // Next drive can depart after: arrival + dwell + buffer
     depart = isTerminalReturnArrival
       ? res.departAfter
-      : new Date(res.arriveAt.getTime() + dwellSecTotal * 1000 + bufferSec * 1000);
+      : new Date(afterArrival.getTime() + bufferSec * 1000);
     const nextIdx = days.findIndex((d) => d.dayISO === dateISOFromDate(depart));
     if (nextIdx >= 0) dayIdx = Math.max(dayIdx, nextIdx);
   }
@@ -281,6 +309,10 @@ export function computeItinerary({
   legs,
   dayTripsByISO,
 }: ComputeItineraryInput): ComputeItineraryOutput {
+  // We allow a one-off departure time for the very first trip day (trip.startTimeHHMM),
+  // but otherwise treat days as starting in the morning for planning.
+  const DEFAULT_DAILY_START_HHMM = "08:00";
+
   const dayCount = diffDaysInclusive(trip.startDateISO, trip.endDateISO);
   const days: DayItinerary[] = Array.from({ length: dayCount }, (_, idx) => ({
     dayISO: addDays(trip.startDateISO, idx),
@@ -308,10 +340,11 @@ export function computeItinerary({
 
   // 3) Schedule outbound as early as possible starting at current dayIdx.
   const outbound = scheduleLegsForward({
-    dayStartTimeHHMM: trip.startTimeHHMM,
+    dayStartTimeHHMM: DEFAULT_DAILY_START_HHMM,
     scenario,
     days,
     startDayIdx: Math.min(dayIdx, days.length - 1),
+    startDepart: makeLocalDateTime(trip.startDateISO, trip.startTimeHHMM),
     legs: preHomeLegs,
     bufferSec,
     kind: "up",
@@ -347,7 +380,7 @@ export function computeItinerary({
   if (actualReturnDepart.getTime() > latestReturnStart.getTime()) spillsBeyondEndDate = true;
 
   const ret = scheduleLegsForward({
-    dayStartTimeHHMM: trip.startTimeHHMM,
+    dayStartTimeHHMM: DEFAULT_DAILY_START_HHMM,
     scenario,
     days,
     startDayIdx: Math.min(returnStartDayIdx, days.length - 1),
@@ -365,8 +398,8 @@ export function computeItinerary({
       if (idx < 0) continue;
       if (dt.legs.length === 0) continue;
 
-      // Start day trip at trip start time on that day.
-      let depart = makeLocalDateTime(dayISO, trip.startTimeHHMM);
+      // Start day trip at the normal daily start time.
+      let depart = makeLocalDateTime(dayISO, DEFAULT_DAILY_START_HHMM);
       for (let i = 0; i < dt.legs.length; i++) {
         const leg = dt.legs[i]!;
         const res = scheduleOneLegMidnightSplit({
@@ -411,12 +444,12 @@ export function computeItinerary({
   }
 
   // 7) Insert remaining "time spent" blocks for days with no matching arrival.
-  // These act like standalone day notes/time, placed sequentially from trip start time that day.
+  // These act like standalone day notes/time, placed sequentially from the normal daily start time.
   const overrides = scenario.dayOverridesByISO ?? {};
   for (const [dayISO, o] of Object.entries(overrides)) {
     const blocks = o.dwellBlocks ?? [];
     if (blocks.length === 0) continue;
-    let t = makeLocalDateTime(dayISO, trip.startTimeHHMM);
+    let t = makeLocalDateTime(dayISO, DEFAULT_DAILY_START_HHMM);
     for (const b of blocks) {
       // Skip blocks that were already inserted after a stop arrival (identified by dwellSource).
       const alreadyInserted = days.some((d) =>
