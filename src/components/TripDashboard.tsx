@@ -18,6 +18,10 @@ import { ItineraryView } from "@/components/ItineraryView";
 
 const LIBRARIES: ("places")[] = ["places"];
 
+type SegmentKind = "up" | "home" | "other";
+
+type SegmentSpec = { ids: string[]; kind: SegmentKind };
+
 type DirectionsState =
   | { status: "idle" }
   | { status: "missing_api_key" }
@@ -25,6 +29,7 @@ type DirectionsState =
   | {
       status: "ready";
       responses: google.maps.DirectionsResult[];
+      kinds: SegmentKind[];
       legs: NormalizedDirectionsLeg[];
     }
   | { status: "error"; message: string };
@@ -64,7 +69,7 @@ function buildPlaceOrder(trip: Trip, scenario: Scenario) {
   return deduped;
 }
 
-function buildSegments(trip: Trip, scenario: Scenario): string[][] {
+function buildSegmentSpecs(trip: Trip, scenario: Scenario): SegmentSpec[] {
   const actualStart = scenario.actualStartPlaceId ?? scenario.selectedOriginPlaceId;
   const routeOrigin = scenario.selectedOriginPlaceId;
   const returnTo =
@@ -72,22 +77,32 @@ function buildSegments(trip: Trip, scenario: Scenario): string[][] {
     Object.values(trip.placesById).find((p) => p.name.includes("Houston"))?.id ??
     routeOrigin;
 
-  const segments: string[][] = [];
+  const specs: SegmentSpec[] = [];
 
   if (actualStart && routeOrigin && actualStart !== routeOrigin) {
-    segments.push([actualStart, routeOrigin]);
+    specs.push({ ids: [actualStart, routeOrigin], kind: "up" });
   }
 
-  // Main route always ends at returnTo (Houston) and starts at routeOrigin.
-  const mainWaypoints = [...scenario.intermediateStopPlaceIds, ...scenario.anchorPlaceIds].filter(
-    (id) => id !== routeOrigin && id !== returnTo,
-  );
-  segments.push([routeOrigin, ...mainWaypoints, returnTo]);
+  const anchors = scenario.anchorPlaceIds.filter((id) => id !== routeOrigin && id !== returnTo);
+  const lastAnchor = anchors.length > 0 ? anchors[anchors.length - 1] : undefined;
+
+  // Outbound: routeOrigin -> ...intermediates... -> ...anchors... -> lastAnchor
+  if (lastAnchor && routeOrigin && lastAnchor !== routeOrigin) {
+    const outboundWaypoints = [...scenario.intermediateStopPlaceIds, ...anchors.slice(0, -1)].filter(
+      (id) => id !== routeOrigin && id !== lastAnchor && Boolean(trip.placesById[id]),
+    );
+    specs.push({ ids: [routeOrigin, ...outboundWaypoints, lastAnchor], kind: "up" });
+  }
+
+  // Return: lastAnchor -> returnTo (Houston)
+  if (lastAnchor && returnTo && lastAnchor !== returnTo) {
+    specs.push({ ids: [lastAnchor, returnTo], kind: "home" });
+  }
 
   // Filter out any invalid ids.
-  return segments
-    .map((seg) => seg.filter((id) => Boolean(trip.placesById[id])))
-    .filter((seg) => seg.length >= 2);
+  return specs
+    .map((s) => ({ ...s, ids: s.ids.filter((id) => Boolean(trip.placesById[id])) }))
+    .filter((s) => s.ids.length >= 2);
 }
 
 function updateScenario(trip: Trip, scenarioId: string, patch: Partial<Scenario>): Trip {
@@ -151,12 +166,12 @@ export function TripDashboard() {
 
   const scenario = useMemo(() => getActiveScenario(trip), [trip]);
   const placeIdsInOrder = useMemo(() => buildPlaceOrder(trip, scenario), [trip, scenario]);
-  const segments = useMemo(() => buildSegments(trip, scenario), [trip, scenario]);
+  const segmentSpecs = useMemo(() => buildSegmentSpecs(trip, scenario), [trip, scenario]);
 
   const currentKey = useMemo(() => {
-    if (segments.length === 0) return null;
-    const segKeys = segments.map((seg) =>
-      seg
+    if (segmentSpecs.length === 0) return null;
+    const segKeys = segmentSpecs.map((spec) =>
+      spec.ids
         .map((id) => {
           const p = trip.placesById[id]!;
           return `${p.location.lat.toFixed(5)},${p.location.lng.toFixed(5)}`;
@@ -164,7 +179,7 @@ export function TripDashboard() {
         .join("|"),
     );
     return `v2:${segKeys.join("||")}`;
-  }, [segments, trip.placesById]);
+  }, [segmentSpecs, trip.placesById]);
 
   const directions: DirectionsState = useMemo(() => {
     if (!apiKey) return { status: "missing_api_key" };
@@ -176,7 +191,9 @@ export function TripDashboard() {
         (window as unknown as { __mtp_directions_cache?: Map<string, DirectionsState> }).__mtp_directions_cache
       )?.get(currentKey);
       const responses = cachedMulti?.status === "ready" ? cachedMulti.responses : [resolvedResponse];
-      return { status: "ready", responses, legs: resolvedLegs };
+      const kinds: SegmentKind[] =
+        cachedMulti?.status === "ready" ? cachedMulti.kinds : ["other"];
+      return { status: "ready", responses, kinds, legs: resolvedLegs };
     }
     if (resolvedKey === currentKey && resolvedError) {
       return { status: "error", message: resolvedError };
@@ -188,7 +205,7 @@ export function TripDashboard() {
   useEffect(() => {
     if (!apiKey || loadError || !isLoaded) return;
     if (!currentKey) return;
-    if (segments.length === 0) return;
+    if (segmentSpecs.length === 0) return;
 
     const cached = (window as unknown as { __mtp_directions_cache?: Map<string, DirectionsState> })
       .__mtp_directions_cache;
@@ -214,10 +231,11 @@ export function TripDashboard() {
       const service = new google.maps.DirectionsService();
 
       const responses: google.maps.DirectionsResult[] = [];
+      const kinds: SegmentKind[] = [];
       const allLegs: NormalizedDirectionsLeg[] = [];
 
       const runSegment = (segIdx: number) => {
-        if (segIdx >= segments.length) {
+        if (segIdx >= segmentSpecs.length) {
           setResolvedKey(currentKey);
           // Store first response for backward compat; MapView will render from the normalized state we compute below.
           setResolvedResponse(responses[0] ?? null);
@@ -228,11 +246,12 @@ export function TripDashboard() {
             cached ??
             ((window as unknown as { __mtp_directions_cache?: Map<string, DirectionsState> })
               .__mtp_directions_cache = new Map());
-          map.set(currentKey, { status: "ready", responses, legs: allLegs });
+          map.set(currentKey, { status: "ready", responses, kinds, legs: allLegs });
           return;
         }
 
-        const seg = segments[segIdx]!;
+        const spec = segmentSpecs[segIdx]!;
+        const seg = spec.ids;
         const originId = seg[0]!;
         const destId = seg[seg.length - 1]!;
         const waypointIds = seg.slice(1, -1);
@@ -263,6 +282,7 @@ export function TripDashboard() {
             }
 
             responses.push(result);
+            kinds.push(spec.kind);
             allLegs.push(...normalizeDirectionsResponse(seg, result));
             runSegment(segIdx + 1);
           },
@@ -273,7 +293,7 @@ export function TripDashboard() {
     }, 750);
 
     return () => window.clearTimeout(timer);
-  }, [apiKey, currentKey, isLoaded, loadError, segments, trip.placesById]);
+  }, [apiKey, currentKey, isLoaded, loadError, segmentSpecs, trip.placesById]);
 
   const itinerary = useMemo(() => {
     if (directions.status !== "ready") {
@@ -326,6 +346,7 @@ export function TripDashboard() {
           scenario={scenario}
           isMapsLoaded={isLoaded}
           directions={directions.status === "ready" ? directions.responses : []}
+          directionKinds={directions.status === "ready" ? directions.kinds : []}
           placeIdsInOrder={placeIdsInOrder}
           itinerary={itinerary.days}
           view={itineraryView}

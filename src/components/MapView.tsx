@@ -1,7 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
-import { DirectionsRenderer, GoogleMap, MarkerF, Polyline } from "@react-google-maps/api";
+/* eslint-disable react-hooks/set-state-in-effect */
+/* eslint-disable react-hooks/preserve-manual-memoization */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DirectionsRenderer, GoogleMap, MarkerF } from "@react-google-maps/api";
 
 import type { DayItinerary, Scenario, Trip } from "@/types/trip";
 
@@ -10,6 +13,7 @@ type Props = {
   scenario: Scenario;
   isMapsLoaded: boolean;
   directions: google.maps.DirectionsResult[];
+  directionKinds?: ("up" | "home" | "other")[];
   placeIdsInOrder: string[];
   itinerary: DayItinerary[];
   view: "overview" | "day";
@@ -28,11 +32,8 @@ function computeBasePlaceByDay(itinerary: DayItinerary[], scenario: Scenario): R
   for (const day of itinerary) {
     map[day.dayISO] = current;
     if (day.legs.length > 0) {
-      current = day.legs[0]!.fromPlaceId;
-      for (const leg of day.legs) {
-        const arrives = !leg.isSplitChunk || (leg.partIndex && leg.partCount && leg.partIndex === leg.partCount);
-        if (arrives) current = leg.toPlaceId;
-      }
+      // Legs are assigned to their arrival day; assume arrival at each leg's destination.
+      for (const leg of day.legs) current = leg.toPlaceId;
     }
   }
   return map;
@@ -43,12 +44,15 @@ export function MapView({
   scenario,
   isMapsLoaded,
   directions,
+  directionKinds,
   placeIdsInOrder,
   itinerary,
   view,
   selectedDayISO,
 }: Props) {
   const mapRef = useRef<google.maps.Map | null>(null);
+  const [dayDirections, setDayDirections] = useState<google.maps.DirectionsResult | null>(null);
+  const [dayDirectionsError, setDayDirectionsError] = useState<string | null>(null);
 
   const baseByDay = useMemo(() => computeBasePlaceByDay(itinerary, scenario), [itinerary, scenario]);
 
@@ -59,7 +63,7 @@ export function MapView({
       .map((id) => trip.placesById[id])
       .filter(Boolean)
       .map((p) => ({ id: p!.id, name: p!.name, location: p!.location }));
-  }, [placeIdsInOrder, trip.placesById]);
+  }, [placeIdsInOrder, trip]);
 
   const dayPoints = useMemo(() => {
     if (!selectedDay) return [];
@@ -86,7 +90,7 @@ export function MapView({
       const p = trip.placesById[id]!;
       return { id: p.id, name: p.name, location: p.location };
     });
-  }, [baseByDay, selectedDay, trip.placesById]);
+  }, [baseByDay, selectedDay, trip]);
 
   const points = view === "day" ? dayPoints : overviewPoints;
 
@@ -113,25 +117,84 @@ export function MapView({
     map.fitBounds(bounds, 60);
   }, [points]);
 
-  const dayPath = useMemo(() => {
+  const dayRouteIds = useMemo(() => {
     if (view !== "day") return [];
     if (!selectedDay || selectedDay.legs.length === 0) return [];
-    const path: google.maps.LatLngLiteral[] = [];
-    for (const leg of selectedDay.legs) {
-      const a = trip.placesById[leg.fromPlaceId]?.location;
-      const b = trip.placesById[leg.toPlaceId]?.location;
-      if (a) path.push(a);
-      if (b) path.push(b);
-    }
-    // Dedupe consecutive duplicates
-    const out: google.maps.LatLngLiteral[] = [];
-    for (const p of path) {
+    const ids: string[] = [selectedDay.legs[0]!.fromPlaceId];
+    for (const leg of selectedDay.legs) ids.push(leg.toPlaceId);
+    // Remove consecutive duplicates
+    const out: string[] = [];
+    for (const id of ids) {
       const last = out[out.length - 1];
-      if (last && last.lat === p.lat && last.lng === p.lng) continue;
-      out.push(p);
+      if (last === id) continue;
+      out.push(id);
     }
-    return out;
+    return out.filter((id) => Boolean(trip.placesById[id]));
   }, [selectedDay, trip.placesById, view]);
+
+  const dayStrokeColor = useMemo(() => {
+    if (!selectedDay) return "#111827";
+    const kinds = selectedDay.legs.map((l) => l.kind ?? "other");
+    if (kinds.includes("home")) return "#F97316";
+    if (kinds.includes("up")) return "#10B981";
+    return "#111827";
+  }, [selectedDay]);
+
+  useEffect(() => {
+    if (!isMapsLoaded) return;
+    if (view !== "day") return;
+    if (dayRouteIds.length < 2) {
+      setDayDirections(null);
+      setDayDirectionsError(null);
+      return;
+    }
+
+    const key = `v1:${dayRouteIds.join("->")}`;
+    const cache = (globalThis as unknown as { __mtp_day_directions_cache?: Map<string, google.maps.DirectionsResult> })
+      .__mtp_day_directions_cache;
+    const cached = cache?.get(key);
+    if (cached) {
+      setDayDirections(cached);
+      setDayDirectionsError(null);
+      return;
+    }
+
+    setDayDirections(null);
+    setDayDirectionsError(null);
+
+    const timer = window.setTimeout(() => {
+      const originId = dayRouteIds[0]!;
+      const destId = dayRouteIds[dayRouteIds.length - 1]!;
+      const waypointIds = dayRouteIds.slice(1, -1);
+
+      const service = new google.maps.DirectionsService();
+      service.route(
+        {
+          origin: trip.placesById[originId]!.location,
+          destination: trip.placesById[destId]!.location,
+          waypoints: waypointIds.map((id) => ({ location: trip.placesById[id]!.location, stopover: true })),
+          travelMode: google.maps.TravelMode.DRIVING,
+          optimizeWaypoints: false,
+        },
+        (result, status) => {
+          if (status !== "OK" || !result) {
+            setDayDirectionsError(`Day directions error: ${status}`);
+            setDayDirections(null);
+            return;
+          }
+
+          setDayDirections(result);
+          const map =
+            cache ??
+            (((globalThis as unknown as { __mtp_day_directions_cache?: Map<string, google.maps.DirectionsResult> })
+              .__mtp_day_directions_cache = new Map()) as Map<string, google.maps.DirectionsResult>);
+          map.set(key, result);
+        },
+      );
+    }, 400);
+
+    return () => window.clearTimeout(timer);
+  }, [dayRouteIds, isMapsLoaded, trip, view]);
 
   return (
     <main className="h-full min-h-[420px] bg-zinc-100">
@@ -145,26 +208,36 @@ export function MapView({
             <MarkerF key={p.id} position={p.location} label={idx === 0 ? "O" : idx === points.length - 1 ? "D" : `${idx}`} />
           ))}
 
-          {view === "overview" ? (
-            directions.map((d, idx) => (
-              <DirectionsRenderer
-                key={idx}
-                directions={d}
-                options={{
-                  suppressMarkers: true,
-                  polylineOptions: { strokeColor: "#111827", strokeOpacity: 0.9, strokeWeight: 5 },
-                }}
-              />
-            ))
-          ) : dayPath.length > 1 ? (
-            <Polyline
-              path={dayPath}
-              options={{
-                strokeColor: "#111827",
-                strokeOpacity: 0.8,
-                strokeWeight: 4,
-              }}
-            />
+          {view === "overview"
+            ? directions.map((d, idx) => {
+                const kind = directionKinds?.[idx] ?? "other";
+                const strokeColor =
+                  kind === "up" ? "#10B981" : kind === "home" ? "#F97316" : "#111827";
+                return (
+                  <DirectionsRenderer
+                    key={idx}
+                    directions={d}
+                    options={{
+                      suppressMarkers: true,
+                      polylineOptions: { strokeColor, strokeOpacity: 0.9, strokeWeight: 5 },
+                    }}
+                  />
+                );
+              })
+            : dayDirections ? (
+                <DirectionsRenderer
+                  directions={dayDirections}
+                  options={{
+                    suppressMarkers: true,
+                    polylineOptions: { strokeColor: dayStrokeColor, strokeOpacity: 0.9, strokeWeight: 5 },
+                  }}
+                />
+              ) : null}
+
+          {view === "day" && dayDirectionsError ? (
+            <div className="absolute left-3 top-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              {dayDirectionsError}
+            </div>
           ) : null}
         </GoogleMap>
       )}

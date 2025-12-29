@@ -18,9 +18,8 @@ export type ComputeItineraryOutput = {
   spillsBeyondEndDate: boolean;
 };
 
-function scaleDistanceMeters(distanceMeters: number, fraction: number) {
-  if (!Number.isFinite(distanceMeters) || distanceMeters <= 0) return 0;
-  return Math.round(distanceMeters * fraction);
+function dateISOFromDate(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 function findLastAnchorId(scenario: Scenario): string | undefined {
@@ -38,58 +37,41 @@ function isRestDay(scenario: Scenario, dayISO: string) {
   return scenario.dayOverridesByISO?.[dayISO]?.mode === "rest";
 }
 
-function availableDriveSec(maxDriveSecPerDay: number) {
-  // 0 means "no limit" in our UI.
-  return maxDriveSecPerDay > 0 ? maxDriveSecPerDay : Number.POSITIVE_INFINITY;
-}
-
 function computeEarliestReturnStartDayIdx(params: {
   days: DayItinerary[];
   scenario: Scenario;
   returnLegs: NormalizedDirectionsLeg[];
-  maxDriveSecPerDay: number;
 }): number {
-  const { days, scenario, returnLegs, maxDriveSecPerDay } = params;
-  const cap = availableDriveSec(maxDriveSecPerDay);
-  let remaining = returnLegs.reduce((sum, l) => sum + l.durationSec, 0);
-  if (remaining <= 0) return days.length - 1;
+  const { days, scenario, returnLegs } = params;
+  const totalSec = returnLegs.reduce((sum, l) => sum + Math.max(0, l.durationSec), 0);
+  if (totalSec <= 0) return days.length - 1;
 
-  // Walk backward from the end date, consuming up to cap per non-rest day.
-  for (let dayIdx = days.length - 1; dayIdx >= 0; dayIdx--) {
-    const dayISO = days[dayIdx]!.dayISO;
-    if (isRestDay(scenario, dayISO)) continue;
-    remaining -= Math.min(remaining, cap);
-    if (remaining <= 0) return dayIdx;
-  }
+  // Nonstop driving: estimate how many calendar days it can span.
+  const spanDays = Math.max(1, Math.ceil(totalSec / (24 * 3600)));
+  let startIdx = Math.max(0, days.length - spanDays);
 
-  // Not enough days.
-  return 0;
+  // Avoid starting on a rest day by moving earlier if needed.
+  while (startIdx > 0 && isRestDay(scenario, days[startIdx]!.dayISO)) startIdx -= 1;
+  return startIdx;
 }
 
 function scheduleLegsForward(params: {
-  trip: Trip;
   scenario: Scenario;
   days: DayItinerary[];
   startDayIdx: number;
   legs: NormalizedDirectionsLeg[];
-  maxDriveSecPerDay: number;
   bufferSec: number;
-  onDayEnter?: (dayIdx: number) => void;
+  kind: "up" | "home" | "other";
 }): { endDayIdx: number; spills: boolean } {
-  const { trip, scenario, days, startDayIdx, legs, maxDriveSecPerDay, bufferSec, onDayEnter } = params;
+  const { scenario, days, startDayIdx, legs, bufferSec, kind } = params;
 
   let dayIdx = startDayIdx;
-  let driveSecUsedToday = 0;
   let depart = makeLocalDateTime(days[dayIdx]!.dayISO, scenario.settings.dailyStartTime);
-
-  const cap = availableDriveSec(maxDriveSecPerDay);
 
   const advanceDay = () => {
     if (dayIdx >= days.length - 1) return false;
     dayIdx += 1;
-    driveSecUsedToday = 0;
     depart = makeLocalDateTime(days[dayIdx]!.dayISO, scenario.settings.dailyStartTime);
-    onDayEnter?.(dayIdx);
     return true;
   };
 
@@ -101,60 +83,30 @@ function scheduleLegsForward(params: {
     return true;
   };
 
-  onDayEnter?.(dayIdx);
-
   for (let legIdx = 0; legIdx < legs.length; legIdx++) {
     const leg = legs[legIdx]!;
+    if (!ensureDriveDay()) return { endDayIdx: dayIdx, spills: true };
 
-    let remaining = Math.max(0, leg.durationSec);
-    const parts = cap === Number.POSITIVE_INFINITY ? 1 : Math.max(1, Math.ceil(remaining / cap));
-    let partIndex = 1;
+    const arrive = new Date(depart.getTime() + Math.max(0, leg.durationSec) * 1000);
+    const arriveDayISO = dateISOFromDate(arrive);
+    const arriveDayIdx = days.findIndex((d) => d.dayISO === arriveDayISO);
+    if (arriveDayIdx < 0) return { endDayIdx: dayIdx, spills: true };
 
-    while (remaining > 0) {
-      if (!ensureDriveDay()) return { endDayIdx: dayIdx, spills: true };
+    const scheduled: ScheduledLeg = {
+      ...leg,
+      departAtISO: depart.toISOString(),
+      arriveAtISO: arrive.toISOString(),
+      dayISO: arriveDayISO,
+      bufferSec,
+      kind,
+    };
 
-      const remainingToday = Math.max(0, cap - driveSecUsedToday);
-      if (remainingToday <= 0) {
-        if (!advanceDay()) return { endDayIdx: dayIdx, spills: true };
-        continue;
-      }
+    days[arriveDayIdx]!.legs.push(scheduled);
+    days[arriveDayIdx]!.totalDriveSec += Math.max(0, leg.durationSec);
 
-      const chunkSec = Math.min(remaining, remainingToday);
-      const fraction = leg.durationSec > 0 ? chunkSec / leg.durationSec : 0;
-      const chunkDistance = scaleDistanceMeters(leg.distanceMeters, fraction);
-
-      const arrive = new Date(depart.getTime() + chunkSec * 1000);
-      const isSplit = parts > 1;
-      const isFinalChunk = remaining - chunkSec <= 0;
-
-      const scheduled: ScheduledLeg = {
-        ...leg,
-        durationSec: chunkSec,
-        distanceMeters: chunkDistance,
-        departAtISO: depart.toISOString(),
-        arriveAtISO: arrive.toISOString(),
-        dayISO: days[dayIdx]!.dayISO,
-        bufferSec: isFinalChunk ? bufferSec : 0,
-        isSplitChunk: isSplit,
-        partIndex: isSplit ? partIndex : undefined,
-        partCount: isSplit ? parts : undefined,
-      };
-
-      days[dayIdx]!.legs.push(scheduled);
-      days[dayIdx]!.totalDriveSec += chunkSec;
-      driveSecUsedToday += chunkSec;
-
-      remaining -= chunkSec;
-      partIndex += 1;
-
-      // Only add buffer after the final chunk that actually arrives at the stop.
-      if (isFinalChunk) {
-        depart = new Date(arrive.getTime() + bufferSec * 1000);
-      } else {
-        // Next chunk continues next day at daily start time.
-        if (!advanceDay()) return { endDayIdx: dayIdx, spills: true };
-      }
-    }
+    // Continuous driving: next departure is immediately after arriving + buffer.
+    depart = new Date(arrive.getTime() + bufferSec * 1000);
+    dayIdx = Math.max(dayIdx, arriveDayIdx);
   }
 
   return { endDayIdx: dayIdx, spills: false };
@@ -179,7 +131,6 @@ export function computeItinerary({
   }
 
   const bufferSec = Math.max(0, Math.round(scenario.settings.bufferMinutesPerStop * 60));
-  const maxDriveSecPerDay = Math.max(0, Math.round(scenario.settings.maxDrivingHoursPerDay * 3600));
   const originStayDays = Math.max(0, Math.floor(scenario.settings.originStayDays ?? 0));
   // Note: we intentionally do NOT add placeholder warnings for "undeclared" days.
 
@@ -207,13 +158,12 @@ export function computeItinerary({
 
   // 3) Schedule outbound as early as possible starting at current dayIdx.
   const outbound = scheduleLegsForward({
-    trip,
     scenario,
     days,
     startDayIdx: Math.min(dayIdx, days.length - 1),
     legs: outboundLegs,
-    maxDriveSecPerDay,
     bufferSec,
+    kind: "up",
   });
   spillsBeyondEndDate ||= outbound.spills;
 
@@ -223,7 +173,6 @@ export function computeItinerary({
     days,
     scenario,
     returnLegs,
-    maxDriveSecPerDay,
   });
   const returnStartDayIdx = Math.max(outbound.endDayIdx, earliestReturnStart);
 
@@ -231,13 +180,12 @@ export function computeItinerary({
 
   // 5) Schedule return segment starting at returnStartDayIdx.
   const ret = scheduleLegsForward({
-    trip,
     scenario,
     days,
     startDayIdx: Math.min(returnStartDayIdx, days.length - 1),
     legs: returnLegs,
-    maxDriveSecPerDay,
     bufferSec,
+    kind: "home",
   });
   spillsBeyondEndDate ||= ret.spills;
 
