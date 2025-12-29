@@ -1,10 +1,14 @@
 "use client";
 
+import { useRef, useState } from "react";
+
 import type { Place, Scenario, Trip } from "@/types/trip";
 import { ScenarioSelector } from "@/components/ScenarioSelector";
 import { StopsList } from "@/components/StopsList";
 import { PlaceSearchBox } from "@/components/PlaceSearchBox";
 import { formatDateShort } from "@/lib/time";
+import { decodeTripJson, downloadTextFile, encodeTripExportV1, makeTripExportFilename } from "@/lib/tripJson";
+import { normalizeTrip } from "@/lib/normalizeTrip";
 
 type Props = {
   trip: Trip;
@@ -17,6 +21,7 @@ type Props = {
   onUpdateScenario: (patch: Partial<Scenario>) => void;
   onUpdateTrip: (patch: Partial<Trip>) => void;
   onUpsertPlace: (place: Place) => void;
+  onReplaceTrip: (trip: Trip) => void;
   onReset: () => void;
 };
 
@@ -31,8 +36,12 @@ export function ControlsPane({
   onUpdateScenario,
   onUpdateTrip,
   onUpsertPlace,
+  onReplaceTrip,
   onReset,
 }: Props) {
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+
   const dayTrips = Object.entries(scenario.dayOverridesByISO ?? {})
     .filter(([, o]) => Boolean(o.dayTrip))
     .map(([dayISO, o]) => ({ dayISO, preset: o.dayTrip!.preset }))
@@ -77,6 +86,63 @@ export function ControlsPane({
         )}
 
         <ScenarioSelector trip={trip} activeScenarioId={scenario.id} onChange={onSetActiveScenario} />
+
+        <div className="rounded-md border border-zinc-200 p-3">
+          <div className="text-sm font-semibold">Save / Load</div>
+          <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <button
+              type="button"
+              className="rounded-md bg-zinc-900 px-3 py-2 text-sm text-white hover:bg-zinc-800"
+              onClick={() => {
+                setImportError(null);
+                const text = encodeTripExportV1(trip);
+                downloadTextFile({ filename: makeTripExportFilename(trip), text });
+              }}
+            >
+              Download JSON
+            </button>
+            <button
+              type="button"
+              className="rounded-md border border-zinc-200 px-3 py-2 text-sm hover:bg-zinc-50"
+              onClick={() => {
+                setImportError(null);
+                fileRef.current?.click();
+              }}
+            >
+              Load JSON
+            </button>
+          </div>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={async (e) => {
+              const f = e.target.files?.[0];
+              // Allow re-selecting the same file after a load.
+              e.currentTarget.value = "";
+              if (!f) return;
+              try {
+                const text = await f.text();
+                const parsed = decodeTripJson(text);
+                const normalized = normalizeTrip(parsed);
+                onReplaceTrip(normalized);
+                setImportError(null);
+              } catch (err) {
+                setImportError(err instanceof Error ? err.message : "Failed to load JSON.");
+              }
+            }}
+          />
+          {importError ? (
+            <div className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-2 text-xs text-rose-900">
+              {importError}
+            </div>
+          ) : (
+            <div className="mt-2 text-[11px] text-zinc-500">
+              JSON includes all places, routes/stops, day overrides, day trips, and time blocks.
+            </div>
+          )}
+        </div>
 
         <div className="rounded-md border border-zinc-200 p-3">
           <div className="text-sm font-semibold">Trip window</div>

@@ -493,6 +493,14 @@ export function TripDashboard() {
           onUpdateScenario={(patch) => setTrip((t) => updateScenario(t, scenario.id, patch))}
           onUpdateTrip={(patch) => setTrip((t) => ({ ...t, ...patch }))}
           onUpsertPlace={(p) => setTrip((t) => upsertPlace(t, p))}
+          onReplaceTrip={(next) => {
+            if (typeof window !== "undefined") {
+              const u = new URL(window.location.href);
+              u.searchParams.delete("s");
+              window.history.replaceState({}, "", u.toString());
+            }
+            setTrip(normalizeTrip(next));
+          }}
           onReset={() => {
             clearTripLocalStorage();
             if (typeof window !== "undefined") {
