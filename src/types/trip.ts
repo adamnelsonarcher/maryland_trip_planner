@@ -18,17 +18,28 @@ export type DayOverrideMode = "auto" | "rest";
 
 export type PresetDayTrip = "NYC" | "PA";
 
+export type DayTripPreset = PresetDayTrip | "CUSTOM";
+
+export type DwellBlock = {
+  id: string;
+  placeId: string;
+  minutes: number;
+  label?: string;
+};
+
 export type DayOverride = {
   mode: DayOverrideMode;
   basePlaceId?: string; // where you're staying / exploring that day
   notes?: string;
   presetDayTrip?: PresetDayTrip; // legacy (kept for migration)
   dayTrip?: {
-    preset: PresetDayTrip;
+    preset: DayTripPreset;
+    destinationPlaceId?: string; // required when preset === "CUSTOM"
     startPlaceId?: string; // default: inferred base location for that day
     endPlaceId?: string; // default: same as startPlaceId
     dwellMinutes: number; // time spent at the destination
   };
+  dwellBlocks?: DwellBlock[];
 };
 
 export type Scenario = {

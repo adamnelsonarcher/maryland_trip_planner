@@ -362,7 +362,8 @@ export function TripDashboard() {
 
       for (const [dayISO, o] of wanted) {
         const plan = o.dayTrip!;
-        const destId = findPresetPlaceId(trip, plan.preset);
+        const destId =
+          plan.preset === "CUSTOM" ? plan.destinationPlaceId : findPresetPlaceId(trip, plan.preset);
         if (!destId) continue;
 
         const startId = plan.startPlaceId ?? baseByDay[dayISO] ?? scenario.selectedOriginPlaceId;
@@ -485,6 +486,8 @@ export function TripDashboard() {
             setAddStopLeg(leg);
             setAddStopOpen(true);
           }}
+          isMapsLoaded={isLoaded}
+          onUpsertPlace={(p) => setTrip((t) => upsertPlace(t, p))}
         />
         </div>
       </div>

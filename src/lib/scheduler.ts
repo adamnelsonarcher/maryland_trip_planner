@@ -335,6 +335,35 @@ export function computeItinerary({
     }
   }
 
+  // 7) Insert "time spent" blocks (no driving) from dwellBlocks.
+  const overrides = scenario.dayOverridesByISO ?? {};
+  for (const [dayISO, o] of Object.entries(overrides)) {
+    const blocks = o.dwellBlocks ?? [];
+    if (blocks.length === 0) continue;
+    let t = makeLocalDateTime(dayISO, trip.startTimeHHMM);
+    for (const b of blocks) {
+      const sec = Math.max(0, Math.round(b.minutes * 60));
+      if (sec <= 0) continue;
+      const end = new Date(t.getTime() + sec * 1000);
+      const dwell: ScheduledLeg = {
+        fromPlaceId: b.placeId,
+        toPlaceId: b.placeId,
+        durationSec: sec,
+        distanceMeters: 0,
+        departAtISO: t.toISOString(),
+        arriveAtISO: end.toISOString(),
+        dayISO,
+        bufferSec: 0,
+        kind: "other",
+        arrivesAtDestination: true,
+        eventType: "dwell",
+        label: b.label ?? `Time at ${trip.placesById[b.placeId]?.name ?? "stop"}`,
+      };
+      pushChunk(days, dayISO, dwell);
+      t = end;
+    }
+  }
+
   if (spillsBeyondEndDate) {
     days[days.length - 1]!.warnings.push(
       "Schedule likely spills beyond the trip end date with the current max driving hours/day setting.",

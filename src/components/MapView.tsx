@@ -28,14 +28,13 @@ const containerStyle: React.CSSProperties = {
 };
 
 function findPresetPlaceId(trip: Trip, preset: "NYC" | "PA"): string | undefined {
-  const lower = preset.toLowerCase();
   if (preset === "NYC") {
     return Object.values(trip.placesById).find((p) => p.name.toLowerCase().includes("new york"))?.id;
   }
   if (preset === "PA") {
     return Object.values(trip.placesById).find((p) => p.name.toLowerCase().includes("pa friends"))?.id;
   }
-  return Object.values(trip.placesById).find((p) => p.name.toLowerCase().includes(lower))?.id;
+  return undefined;
 }
 
 export function MapView({
@@ -124,7 +123,10 @@ export function MapView({
     // If no driving that day but a preset day trip is selected, render a loop from base -> preset -> base.
     if (selectedDay.legs.length === 0 && selectedOverride?.dayTrip) {
       const baseId = selectedOverride.dayTrip.startPlaceId ?? baseByDay[selectedDayISO];
-      const presetPlaceId = findPresetPlaceId(trip, selectedOverride.dayTrip.preset);
+      const presetPlaceId =
+        selectedOverride.dayTrip.preset === "CUSTOM"
+          ? selectedOverride.dayTrip.destinationPlaceId
+          : findPresetPlaceId(trip, selectedOverride.dayTrip.preset);
       const endId = selectedOverride.dayTrip.endPlaceId ?? baseId;
       if (baseId && presetPlaceId && endId) return [baseId, presetPlaceId, endId];
       return [];

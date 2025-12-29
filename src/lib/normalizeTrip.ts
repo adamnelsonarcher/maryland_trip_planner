@@ -36,6 +36,12 @@ function normalizeScenario(trip: Trip, scenario: Scenario): Scenario {
       };
       // Keep presetDayTrip for backward compat, but dayTrip becomes the source of truth.
     }
+    if (!normalized.dayOverridesByISO![dayISO]!.dwellBlocks) {
+      normalized.dayOverridesByISO![dayISO] = {
+        ...normalized.dayOverridesByISO![dayISO]!,
+        dwellBlocks: [],
+      };
+    }
   }
 
   // Migration: rename scenarios to match current UI expectation.

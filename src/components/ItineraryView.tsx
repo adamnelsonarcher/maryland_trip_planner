@@ -2,11 +2,13 @@
 
 import { useMemo } from "react";
 
-import type { DayItinerary, PresetDayTrip, Scenario, Trip } from "@/types/trip";
+import type { DayItinerary, DayTripPreset, DwellBlock, PresetDayTrip, Scenario, Trip } from "@/types/trip";
 import { DayCard } from "@/components/DayCard";
 import type { DayOverrideMode } from "@/types/trip";
 import { formatDateShort } from "@/lib/time";
 import { computeBasePlaceByDay } from "@/lib/baseByDay";
+import { nanoid } from "nanoid";
+import { PlaceSearchBox } from "@/components/PlaceSearchBox";
 
 type Props = {
   trip: Trip;
@@ -18,6 +20,8 @@ type Props = {
   onChangeView: (view: "overview" | "day") => void;
   onChangeSelectedDayISO: (dayISO: string) => void;
   onLegClick?: (leg: DayItinerary["legs"][number]) => void;
+  isMapsLoaded: boolean;
+  onUpsertPlace: (place: import("@/types/trip").Place) => void;
 };
 
 export function ItineraryView({
@@ -30,6 +34,8 @@ export function ItineraryView({
   onChangeView,
   onChangeSelectedDayISO,
   onLegClick,
+  isMapsLoaded,
+  onUpsertPlace,
 }: Props) {
   const selectedDay = useMemo(
     () => itinerary.find((d) => d.dayISO === selectedDayISO) ?? itinerary[0],
@@ -44,10 +50,12 @@ export function ItineraryView({
   const baseByDay = useMemo(() => computeBasePlaceByDay(itinerary, scenario), [itinerary, scenario]);
   const inferredStartPlaceId = baseByDay[selectedDayISO];
 
-  const dayTripPreset: "" | PresetDayTrip = override?.dayTrip?.preset ?? "";
+  const dayTripPreset: "" | DayTripPreset = override?.dayTrip?.preset ?? "";
   const dayTripStart = override?.dayTrip?.startPlaceId ?? "";
   const dayTripEnd = override?.dayTrip?.endPlaceId ?? "";
+  const dayTripDest = override?.dayTrip?.destinationPlaceId ?? "";
   const dwellMinutes = override?.dayTrip?.dwellMinutes ?? 120;
+  const dwellBlocks: DwellBlock[] = override?.dwellBlocks ?? [];
 
   const tripPlaceOptions = useMemo(() => {
     const places = Object.values(trip.placesById);
@@ -150,7 +158,7 @@ export function ItineraryView({
                   value={dayTripPreset}
                   onChange={(e) => {
                     const nextOverrides = { ...(scenario.dayOverridesByISO ?? {}) };
-                    const v = e.target.value as "" | PresetDayTrip;
+                    const v = e.target.value as "" | DayTripPreset;
                     const existing = nextOverrides[selectedDayISO] ?? { mode: "auto" as const };
                     if (!v) {
                       const { dayTrip: _discard, ...rest } = existing;
@@ -164,6 +172,7 @@ export function ItineraryView({
                           dwellMinutes: existing.dayTrip?.dwellMinutes ?? 120,
                           startPlaceId: existing.dayTrip?.startPlaceId,
                           endPlaceId: existing.dayTrip?.endPlaceId,
+                          destinationPlaceId: existing.dayTrip?.destinationPlaceId,
                         },
                       };
                     }
@@ -173,11 +182,36 @@ export function ItineraryView({
                   <option value="">None</option>
                   <option value="NYC">NYC day trip</option>
                   <option value="PA">PA day trip</option>
+                  <option value="CUSTOM">Custom drive</option>
                 </select>
               </label>
 
               {dayTripPreset ? (
                 <>
+                  {dayTripPreset === "CUSTOM" ? (
+                    <div className="col-span-2">
+                      <div className="text-xs text-zinc-600 mb-1">Destination</div>
+                      <PlaceSearchBox
+                        isMapsLoaded={isMapsLoaded}
+                        placeholder="Pick a destination…"
+                        onPlaceSelected={(place) => {
+                          onUpsertPlace(place);
+                          const nextOverrides = { ...(scenario.dayOverridesByISO ?? {}) };
+                          const existing = nextOverrides[selectedDayISO] ?? { mode: "auto" as const };
+                          const dt = existing.dayTrip ?? { preset: "CUSTOM" as const, dwellMinutes };
+                          nextOverrides[selectedDayISO] = {
+                            ...existing,
+                            dayTrip: { ...dt, preset: "CUSTOM", destinationPlaceId: place.id },
+                          };
+                          onUpdateScenario({ dayOverridesByISO: nextOverrides });
+                        }}
+                      />
+                      <div className="mt-1 text-[11px] text-zinc-500">
+                        Selected: {dayTripDest ? trip.placesById[dayTripDest]?.name : "None"}
+                      </div>
+                    </div>
+                  ) : null}
+
                   <label className="flex flex-col gap-1">
                     <span className="text-xs text-zinc-600">Start</span>
                     <select
@@ -253,6 +287,76 @@ export function ItineraryView({
                       }}
                     />
                   </label>
+
+                  <div className="col-span-2 border-t border-zinc-200 pt-3">
+                    <div className="text-sm font-semibold">Time blocks (no driving)</div>
+                    <div className="mt-2 flex flex-col gap-2">
+                      {dwellBlocks.length === 0 ? (
+                        <div className="text-sm text-zinc-500">None yet. Add one below.</div>
+                      ) : (
+                        dwellBlocks.map((b) => (
+                          <div key={b.id} className="flex items-center gap-2 rounded-md border border-zinc-200 p-2">
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-sm font-medium">
+                                {b.label ?? trip.placesById[b.placeId]?.name ?? "Time block"}
+                              </div>
+                              <div className="text-xs text-zinc-500">
+                                {trip.placesById[b.placeId]?.name ?? b.placeId}
+                              </div>
+                            </div>
+                            <input
+                              className="w-24 rounded-md border border-zinc-200 px-2 py-1 text-sm"
+                              type="number"
+                              min={0}
+                              step={15}
+                              value={b.minutes}
+                              onChange={(e) => {
+                                const nextOverrides = { ...(scenario.dayOverridesByISO ?? {}) };
+                                const existing = nextOverrides[selectedDayISO] ?? { mode: "auto" as const };
+                                const nextBlocks = (existing.dwellBlocks ?? []).map((x) =>
+                                  x.id === b.id ? { ...x, minutes: Number(e.target.value || 0) } : x,
+                                );
+                                nextOverrides[selectedDayISO] = { ...existing, dwellBlocks: nextBlocks };
+                                onUpdateScenario({ dayOverridesByISO: nextOverrides });
+                              }}
+                            />
+                            <button
+                              className="rounded-md border border-zinc-200 px-2 py-1 text-sm hover:bg-zinc-50"
+                              onClick={() => {
+                                const nextOverrides = { ...(scenario.dayOverridesByISO ?? {}) };
+                                const existing = nextOverrides[selectedDayISO] ?? { mode: "auto" as const };
+                                const nextBlocks = (existing.dwellBlocks ?? []).filter((x) => x.id !== b.id);
+                                nextOverrides[selectedDayISO] = { ...existing, dwellBlocks: nextBlocks };
+                                onUpdateScenario({ dayOverridesByISO: nextOverrides });
+                              }}
+                              type="button"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ))
+                      )}
+
+                      <button
+                        type="button"
+                        className="rounded-md bg-zinc-900 px-3 py-2 text-sm text-white hover:bg-zinc-800"
+                        onClick={() => {
+                          const baseId = inferredStartPlaceId;
+                          if (!baseId) return;
+                          const nextOverrides = { ...(scenario.dayOverridesByISO ?? {}) };
+                          const existing = nextOverrides[selectedDayISO] ?? { mode: "auto" as const };
+                          const nextBlocks: DwellBlock[] = [
+                            ...(existing.dwellBlocks ?? []),
+                            { id: nanoid(), placeId: baseId, minutes: 120, label: "Time spent" },
+                          ];
+                          nextOverrides[selectedDayISO] = { ...existing, dwellBlocks: nextBlocks };
+                          onUpdateScenario({ dayOverridesByISO: nextOverrides });
+                        }}
+                      >
+                        Add time spent (at current location)
+                      </button>
+                    </div>
+                  </div>
                 </>
               ) : null}
             </div>
