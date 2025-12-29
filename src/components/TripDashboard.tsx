@@ -12,6 +12,7 @@ import { computeItinerary } from "@/lib/scheduler";
 import { normalizeDirectionsResponse } from "@/lib/directions";
 import { normalizeTrip } from "@/lib/normalizeTrip";
 import { computeBasePlaceByDay } from "@/lib/baseByDay";
+import { makeLocalDateTime } from "@/lib/time";
 import type { NormalizedDirectionsLeg, Place, Scenario, ScheduledLeg, Trip } from "@/types/trip";
 import { ControlsPane } from "@/components/ControlsPane";
 import { MapView } from "@/components/MapView";
@@ -32,7 +33,7 @@ type DirectionsState =
       status: "ready";
       responses: google.maps.DirectionsResult[];
       kinds: SegmentKind[];
-      legs: NormalizedDirectionsLeg[];
+      legs: (NormalizedDirectionsLeg & { kind?: SegmentKind })[];
     }
   | { status: "error"; message: string };
 
@@ -109,7 +110,10 @@ function buildSegmentSpecs(trip: Trip, scenario: Scenario): SegmentSpec[] {
 
   // Separate event (black): Annapolis -> Lake House
   if (annapolisId && lakeHouseId && annapolisId !== lakeHouseId) {
-    specs.push({ ids: [annapolisId, lakeHouseId], kind: "other" });
+    const betweenStops = (scenario.postAnnapolisStopPlaceIds ?? []).filter(
+      (id) => id !== annapolisId && id !== lakeHouseId && Boolean(trip.placesById[id]),
+    );
+    specs.push({ ids: [annapolisId, ...betweenStops, lakeHouseId], kind: "other" });
   }
 
   // Return home (orange): Lake House -> returnTo (Houston)
@@ -148,7 +152,7 @@ export function TripDashboard() {
 
   const [resolvedKey, setResolvedKey] = useState<string | null>(null);
   const [resolvedResponse, setResolvedResponse] = useState<google.maps.DirectionsResult | null>(null);
-  const [resolvedLegs, setResolvedLegs] = useState<NormalizedDirectionsLeg[]>([]);
+  const [resolvedLegs, setResolvedLegs] = useState<(NormalizedDirectionsLeg & { kind?: SegmentKind })[]>([]);
   const [resolvedError, setResolvedError] = useState<string | null>(null);
   const [itineraryView, setItineraryView] = useState<"overview" | "day">("overview");
   const [selectedDayISO, setSelectedDayISO] = useState<string>(() => makeDefaultTrip().startDateISO);
@@ -334,6 +338,32 @@ export function TripDashboard() {
     return computeItinerary({ trip, scenario, legs: directions.legs, dayTripsByISO });
   }, [trip, scenario, directions, dayTripsByISO]);
 
+  const latestAllowedReturnDepartISO = useMemo(() => {
+    if (directions.status !== "ready") return null;
+    const homeLegs = directions.legs.filter((l) => l.kind === "home");
+    if (homeLegs.length === 0) return null;
+
+    const bufferSec = Math.max(0, Math.round(scenario.settings.bufferMinutesPerStop * 60));
+    const totalDrive = homeLegs.reduce((sum, l) => sum + Math.max(0, l.durationSec), 0);
+    const interLegBuffers = Math.max(0, homeLegs.length - 1) * bufferSec;
+    const total = totalDrive + interLegBuffers;
+    const cutoff = makeLocalDateTime(trip.endDateISO, trip.endTimeHHMM);
+    const latest = new Date(cutoff.getTime() - total * 1000);
+    return latest.toISOString().slice(0, 16);
+  }, [directions, scenario.settings.bufferMinutesPerStop, trip.endDateISO, trip.endTimeHHMM]);
+
+  // Clamp user-selected return departure if it exceeds the latest allowed.
+  useEffect(() => {
+    if (!latestAllowedReturnDepartISO) return;
+    const latest = new Date(latestAllowedReturnDepartISO);
+    const chosen = makeLocalDateTime(trip.returnDepartDateISO, trip.returnDepartTimeHHMM);
+    if (chosen.getTime() <= latest.getTime()) return;
+    // Clamp to latest allowed.
+    const iso = latest.toISOString().slice(0, 16);
+    const [d, t] = iso.split("T");
+    setTrip((prev) => ({ ...prev, returnDepartDateISO: d!, returnDepartTimeHHMM: t! }));
+  }, [latestAllowedReturnDepartISO, trip.returnDepartDateISO, trip.returnDepartTimeHHMM]);
+
   // Build day-trip Directions + normalized legs (cached) so:
   // - schedule uses real drive times
   // - overview map shows black polylines
@@ -449,6 +479,7 @@ export function TripDashboard() {
           isMapsLoaded={isLoaded}
           mapsApiKeyPresent={Boolean(apiKey)}
           directionsStatus={directions.status}
+          latestAllowedReturnDepartISO={latestAllowedReturnDepartISO}
           onSetActiveScenario={(id) => setTrip((t) => ({ ...t, activeScenarioId: id }))}
           onUpdateScenario={(patch) => setTrip((t) => updateScenario(t, scenario.id, patch))}
           onUpdateTrip={(patch) => setTrip((t) => ({ ...t, ...patch }))}
@@ -507,11 +538,13 @@ export function TripDashboard() {
         setTrip((t) => {
           const s = getActiveScenario(t);
           const next = upsertPlace(t, place);
-          // If you clicked a "home" leg, add to return stops; otherwise add to outbound intermediates.
-          const isHome = addStopLeg?.kind === "home";
-          const updatedScenario: Partial<Scenario> = isHome
-            ? { returnStopPlaceIds: [...(s.returnStopPlaceIds ?? []), place.id] }
-            : { intermediateStopPlaceIds: [...s.intermediateStopPlaceIds, place.id] };
+          const kind = addStopLeg?.kind ?? "up";
+          const updatedScenario: Partial<Scenario> =
+            kind === "home"
+              ? { returnStopPlaceIds: [...(s.returnStopPlaceIds ?? []), place.id] }
+              : kind === "other"
+                ? { postAnnapolisStopPlaceIds: [...(s.postAnnapolisStopPlaceIds ?? []), place.id] }
+                : { intermediateStopPlaceIds: [...s.intermediateStopPlaceIds, place.id] };
           return updateScenario(next, s.id, updatedScenario);
         });
       }}

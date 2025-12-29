@@ -63,7 +63,7 @@ function scheduleOneLegMidnightSplit(params: {
   leg: NormalizedDirectionsLeg & { kind?: LegKind };
   bufferSec: number;
   kind: "up" | "home" | "other";
-}): { departAfter: Date; spills: boolean } {
+}): { departAfter: Date; arriveAt: Date; spills: boolean } {
   const { days, scenario, depart, leg, bufferSec, kind } = params;
   const t0 = depart;
   const totalSec = Math.max(0, leg.durationSec);
@@ -93,6 +93,7 @@ function scheduleOneLegMidnightSplit(params: {
       bufferSec: isFinal ? bufferSec : 0,
       kind: (leg.kind ?? kind),
       arrivesAtDestination: isFinal,
+      eventType: "drive",
     };
 
     // Respect "rest" days: if a chunk would appear on a rest day, we still record it but warn.
@@ -103,7 +104,7 @@ function scheduleOneLegMidnightSplit(params: {
       }
     }
 
-    if (!pushChunk(days, dayISO, chunk)) return { departAfter: currentStart, spills: true };
+    if (!pushChunk(days, dayISO, chunk)) return { departAfter: currentStart, arriveAt: tArrive, spills: true };
 
     remainingSec -= chunkSec;
     currentStart = chunkEnd;
@@ -112,7 +113,7 @@ function scheduleOneLegMidnightSplit(params: {
   }
 
   const departAfter = new Date(tArrive.getTime() + bufferSec * 1000);
-  return { departAfter, spills: false };
+  return { departAfter, arriveAt: tArrive, spills: false };
 }
 
 function computeLatestReturnStart(params: {
@@ -160,7 +161,7 @@ function scheduleLegsForward(params: {
   legs: (NormalizedDirectionsLeg & { kind?: LegKind })[];
   bufferSec: number;
   kind: "up" | "home" | "other";
-}): { endDayIdx: number; spills: boolean } {
+}): { endDayIdx: number; endDepartAfter: Date; spills: boolean } {
   const { dayStartTimeHHMM, scenario, days, startDayIdx, startDepart, legs, bufferSec, kind } = params;
 
   let dayIdx = startDayIdx;
@@ -181,17 +182,83 @@ function scheduleLegsForward(params: {
     return true;
   };
 
+  const usedBlockIds = new Set<string>();
+  const overrides = scenario.dayOverridesByISO ?? {};
+
   for (let legIdx = 0; legIdx < legs.length; legIdx++) {
     const leg = legs[legIdx]!;
-    if (!ensureDriveDay()) return { endDayIdx: dayIdx, spills: true };
+    if (!ensureDriveDay()) return { endDayIdx: dayIdx, endDepartAfter: depart, spills: true };
 
     const res = scheduleOneLegMidnightSplit({ days, scenario, depart, leg, bufferSec, kind });
-    if (res.spills) return { endDayIdx: dayIdx, spills: true };
-    depart = res.departAfter;
-    dayIdx = Math.max(dayIdx, days.findIndex((d) => d.dayISO === dateISOFromDate(depart)));
+    if (res.spills) return { endDayIdx: dayIdx, endDepartAfter: depart, spills: true };
+
+    // After arriving at the destination for this leg, insert:
+    // - Any explicit dwellBlocks for that stop (editable/saved)
+    // - Otherwise, an implicit "Time at ..." placeholder card (click to set minutes)
+    const arriveDayISO = dateISOFromDate(res.arriveAt);
+    const blocks = overrides[arriveDayISO]?.dwellBlocks ?? [];
+    let insertedAnyForPlace = false;
+
+    let dwellSecTotal = 0;
+    for (const b of blocks) {
+      if (usedBlockIds.has(b.id)) continue;
+      if (b.placeId !== leg.toPlaceId) continue;
+      const sec = Math.max(0, Math.round(b.minutes * 60));
+      // Allow 0-minute blocks to exist in data, but don't schedule them as events.
+      if (sec <= 0) {
+        usedBlockIds.add(b.id);
+        insertedAnyForPlace = true;
+        continue;
+      }
+
+      const dwellStart = new Date(res.arriveAt.getTime() + dwellSecTotal * 1000);
+      const dwellEnd = new Date(dwellStart.getTime() + sec * 1000);
+      const dwell: ScheduledLeg = {
+        fromPlaceId: b.placeId,
+        toPlaceId: b.placeId,
+        durationSec: sec,
+        distanceMeters: 0,
+        departAtISO: dwellStart.toISOString(),
+        arriveAtISO: dwellEnd.toISOString(),
+        dayISO: arriveDayISO,
+        bufferSec: 0,
+        kind: "other",
+        arrivesAtDestination: true,
+        eventType: "dwell",
+        label: b.label,
+        dwellSource: { type: "dwellBlock", blockId: b.id },
+      };
+      pushChunk(days, arriveDayISO, dwell);
+      usedBlockIds.add(b.id);
+      insertedAnyForPlace = true;
+      dwellSecTotal += sec;
+    }
+
+    if (!insertedAnyForPlace) {
+      const at: ScheduledLeg = {
+        fromPlaceId: leg.toPlaceId,
+        toPlaceId: leg.toPlaceId,
+        durationSec: 0,
+        distanceMeters: 0,
+        departAtISO: res.arriveAt.toISOString(),
+        arriveAtISO: res.arriveAt.toISOString(),
+        dayISO: arriveDayISO,
+        bufferSec: 0,
+        kind: "other",
+        arrivesAtDestination: true,
+        eventType: "dwell",
+        dwellSource: { type: "implicitArrival" },
+      };
+      pushChunk(days, arriveDayISO, at);
+    }
+
+    // Next drive can depart after: arrival + dwell + buffer
+    depart = new Date(res.arriveAt.getTime() + dwellSecTotal * 1000 + bufferSec * 1000);
+    const nextIdx = days.findIndex((d) => d.dayISO === dateISOFromDate(depart));
+    if (nextIdx >= 0) dayIdx = Math.max(dayIdx, nextIdx);
   }
 
-  return { endDayIdx: dayIdx, spills: false };
+  return { endDayIdx: dayIdx, endDepartAfter: depart, spills: false };
 }
 
 export function computeItinerary({
@@ -256,19 +323,21 @@ export function computeItinerary({
     bufferSec,
   });
 
-  // If outbound ends after the latest possible return start, we can't finish by end of trip.
-  const outboundEndDay = days[outbound.endDayIdx]?.dayISO ?? trip.startDateISO;
-  const outboundEndAt = makeLocalDateTime(outboundEndDay, trip.startTimeHHMM);
-  if (outboundEndAt.getTime() > latestReturnStart.getTime()) {
-    spillsBeyondEndDate = true;
-  }
+  // User-chosen return depart, clamped to latest allowed.
+  const userReturnDepart = makeLocalDateTime(trip.returnDepartDateISO, trip.returnDepartTimeHHMM);
+  const clampedUserReturnDepart = new Date(Math.min(userReturnDepart.getTime(), latestReturnStart.getTime()));
+  // Can't leave before finishing the outbound (arriving at the lake house / last non-home segment).
+  const earliestReturnDepart = outbound.endDepartAfter;
+  const actualReturnDepart = new Date(Math.max(clampedUserReturnDepart.getTime(), earliestReturnDepart.getTime()));
+
+  if (actualReturnDepart.getTime() > latestReturnStart.getTime()) spillsBeyondEndDate = true;
 
   const ret = scheduleLegsForward({
     dayStartTimeHHMM: trip.startTimeHHMM,
     scenario,
     days,
     startDayIdx: Math.min(returnStartDayIdx, days.length - 1),
-    startDepart: latestReturnStart,
+    startDepart: actualReturnDepart,
     legs: returnLegs,
     bufferSec,
     kind: "home",
@@ -327,13 +396,21 @@ export function computeItinerary({
     }
   }
 
-  // 7) Insert "time spent" blocks (no driving) from dwellBlocks.
+  // 7) Insert remaining "time spent" blocks for days with no matching arrival.
+  // These act like standalone day notes/time, placed sequentially from trip start time that day.
   const overrides = scenario.dayOverridesByISO ?? {};
   for (const [dayISO, o] of Object.entries(overrides)) {
     const blocks = o.dwellBlocks ?? [];
     if (blocks.length === 0) continue;
     let t = makeLocalDateTime(dayISO, trip.startTimeHHMM);
     for (const b of blocks) {
+      // Skip blocks that were already inserted after a stop arrival (identified by dwellSource).
+      const alreadyInserted = days.some((d) =>
+        d.dayISO === dayISO &&
+        d.legs.some((ev) => ev.eventType === "dwell" && ev.dwellSource?.type === "dwellBlock" && ev.dwellSource.blockId === b.id),
+      );
+      if (alreadyInserted) continue;
+
       const sec = Math.max(0, Math.round(b.minutes * 60));
       if (sec <= 0) continue;
       const end = new Date(t.getTime() + sec * 1000);

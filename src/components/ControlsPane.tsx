@@ -12,6 +12,7 @@ type Props = {
   isMapsLoaded: boolean;
   mapsApiKeyPresent: boolean;
   directionsStatus: string;
+  latestAllowedReturnDepartISO?: string | null;
   onSetActiveScenario: (id: string) => void;
   onUpdateScenario: (patch: Partial<Scenario>) => void;
   onUpdateTrip: (patch: Partial<Trip>) => void;
@@ -25,6 +26,7 @@ export function ControlsPane({
   isMapsLoaded,
   mapsApiKeyPresent,
   directionsStatus,
+  latestAllowedReturnDepartISO,
   onSetActiveScenario,
   onUpdateScenario,
   onUpdateTrip,
@@ -80,7 +82,7 @@ export function ControlsPane({
           <div className="text-sm font-semibold">Trip window</div>
           <div className="mt-2 grid grid-cols-2 gap-3">
             <label className="flex flex-col gap-1">
-              <span className="text-xs text-zinc-600">Start date</span>
+              <span className="text-xs text-zinc-600">Depart Colorado Bend (date)</span>
               <input
                 className="rounded-md border border-zinc-200 px-2 py-1 text-sm"
                 type="date"
@@ -89,7 +91,7 @@ export function ControlsPane({
               />
             </label>
             <label className="flex flex-col gap-1">
-              <span className="text-xs text-zinc-600">Start time</span>
+              <span className="text-xs text-zinc-600">Depart Colorado Bend (time)</span>
               <input
                 className="rounded-md border border-zinc-200 px-2 py-1 text-sm"
                 type="time"
@@ -115,6 +117,32 @@ export function ControlsPane({
                 onChange={(e) => onUpdateTrip({ endTimeHHMM: e.target.value })}
               />
             </label>
+
+            <label className="flex flex-col gap-1 col-span-2">
+              <span className="text-xs text-zinc-600">Depart for return to Houston</span>
+              <div className="grid grid-cols-2 gap-3">
+                <input
+                  className="rounded-md border border-zinc-200 px-2 py-1 text-sm"
+                  type="date"
+                  value={trip.returnDepartDateISO}
+                  onChange={(e) => onUpdateTrip({ returnDepartDateISO: e.target.value })}
+                />
+                <input
+                  className="rounded-md border border-zinc-200 px-2 py-1 text-sm"
+                  type="time"
+                  value={trip.returnDepartTimeHHMM}
+                  onChange={(e) => onUpdateTrip({ returnDepartTimeHHMM: e.target.value })}
+                />
+              </div>
+              {latestAllowedReturnDepartISO ? (
+                <div className="mt-1 text-[11px] text-zinc-500">
+                  Latest allowed (to still arrive by trip end):{" "}
+                  <span className="font-medium">{latestAllowedReturnDepartISO.replace("T", " ").slice(0, 16)}</span>
+                </div>
+              ) : (
+                <div className="mt-1 text-[11px] text-zinc-500">Latest allowed will appear once drive-home times are computed.</div>
+              )}
+            </label>
           </div>
           <div className="mt-2 text-xs text-zinc-500">
             Origin is fixed to Colorado Bend (base) with an alternate scenario that stops in Houston first.
@@ -123,14 +151,14 @@ export function ControlsPane({
 
         <div className="rounded-md border border-zinc-200 p-3">
           <div className="flex items-center justify-between">
-            <div className="text-sm font-semibold">Intermediate stops</div>
+            <div className="text-sm font-semibold">Route up stops (to Annapolis)</div>
             <div className="text-xs text-zinc-500">{scenario.intermediateStopPlaceIds.length}</div>
           </div>
 
           <div className="mt-2">
             <PlaceSearchBox
               isMapsLoaded={isMapsLoaded}
-              placeholder="Add a stop (Google Places)…"
+              placeholder="Add a stop on the route up…"
               onPlaceSelected={(place) => {
                 onUpsertPlace(place);
                 onUpdateScenario({
@@ -145,6 +173,92 @@ export function ControlsPane({
               placesById={trip.placesById}
               stopPlaceIds={scenario.intermediateStopPlaceIds}
               onChange={(ids) => onUpdateScenario({ intermediateStopPlaceIds: ids })}
+            />
+          </div>
+
+          <div className="mt-4 border-t border-zinc-200 pt-3">
+            <div className="text-sm font-semibold">Recommended (route up)</div>
+            <div className="mt-2 space-y-2">
+              {[
+                "Hot Springs National Park",
+                "Nashville, TN",
+                "Mammoth Cave National Park",
+                "New River Gorge National Park",
+                "Shenandoah National Park",
+              ].map((name) => {
+                const p = Object.values(trip.placesById).find((x) => x.name === name);
+                const already = p ? scenario.intermediateStopPlaceIds.includes(p.id) : false;
+                return (
+                  <div key={name} className="flex items-center justify-between gap-2 rounded-md bg-zinc-50 px-2 py-2">
+                    <div className="text-sm font-medium truncate">{name}</div>
+                    <button
+                      type="button"
+                      className="rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-100 disabled:opacity-50"
+                      disabled={!p || already}
+                      onClick={() => {
+                        if (!p) return;
+                        onUpdateScenario({
+                          intermediateStopPlaceIds: [...scenario.intermediateStopPlaceIds, p.id],
+                        });
+                      }}
+                    >
+                      {already ? "Added" : "Add"}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-md border border-zinc-200 p-3">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-semibold">Annapolis → Lake House stops</div>
+            <div className="text-xs text-zinc-500">{(scenario.postAnnapolisStopPlaceIds ?? []).length}</div>
+          </div>
+          <div className="mt-2">
+            <PlaceSearchBox
+              isMapsLoaded={isMapsLoaded}
+              placeholder="Add a stop between Annapolis and the lake house…"
+              onPlaceSelected={(place) => {
+                onUpsertPlace(place);
+                onUpdateScenario({
+                  postAnnapolisStopPlaceIds: [...(scenario.postAnnapolisStopPlaceIds ?? []), place.id],
+                });
+              }}
+            />
+          </div>
+          <div className="mt-3">
+            <StopsList
+              placesById={trip.placesById}
+              stopPlaceIds={scenario.postAnnapolisStopPlaceIds ?? []}
+              onChange={(ids) => onUpdateScenario({ postAnnapolisStopPlaceIds: ids })}
+            />
+          </div>
+        </div>
+
+        <div className="rounded-md border border-zinc-200 p-3">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-semibold">Drive home stops</div>
+            <div className="text-xs text-zinc-500">{(scenario.returnStopPlaceIds ?? []).length}</div>
+          </div>
+          <div className="mt-2">
+            <PlaceSearchBox
+              isMapsLoaded={isMapsLoaded}
+              placeholder="Add a stop on the drive home…"
+              onPlaceSelected={(place) => {
+                onUpsertPlace(place);
+                onUpdateScenario({
+                  returnStopPlaceIds: [...(scenario.returnStopPlaceIds ?? []), place.id],
+                });
+              }}
+            />
+          </div>
+          <div className="mt-3">
+            <StopsList
+              placesById={trip.placesById}
+              stopPlaceIds={scenario.returnStopPlaceIds ?? []}
+              onChange={(ids) => onUpdateScenario({ returnStopPlaceIds: ids })}
             />
           </div>
         </div>

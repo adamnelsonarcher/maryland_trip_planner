@@ -18,6 +18,7 @@ type Props = {
   onDwellClick?: (leg: DayItinerary["legs"][number]) => void;
   onInsertBetween?: (dayISO: string, index: number) => void; // index in day.legs to insert before
   dayTripLabel?: string | null;
+  locationLabel?: string | null;
 };
 
 export function DayCard({
@@ -28,6 +29,7 @@ export function DayCard({
   onDwellClick,
   onInsertBetween,
   dayTripLabel,
+  locationLabel,
 }: Props) {
   return (
     <button
@@ -39,6 +41,7 @@ export function DayCard({
         <div>
           <div className="text-sm font-semibold">{formatDateShort(day.dayISO)}</div>
           <div className="text-xs text-zinc-500">{day.dayISO}</div>
+          {locationLabel ? <div className="mt-1 text-xs text-zinc-700">{locationLabel}</div> : null}
         </div>
         <div className="text-xs text-zinc-600">
           Drive: <span className="font-medium">{fmtDuration(day.totalDriveSec)}</span>
@@ -121,8 +124,19 @@ export function DayCard({
                         {isDwell ? leg.label ?? `Time at ${to}` : `${from} → ${to}`}
                       </div>
                       <div className="text-xs text-zinc-500">
-                        {formatTimeShort(depart)} → {formatTimeShort(arrive)}
-                        {isDwell ? "" : ` • ${fmtDuration(leg.durationSec)}`}
+                        {isDwell ? (
+                          leg.durationSec > 0 ? (
+                            <>
+                              {formatTimeShort(depart)} → {formatTimeShort(arrive)}
+                            </>
+                          ) : (
+                            "Click to set time"
+                          )
+                        ) : (
+                          <>
+                            {formatTimeShort(depart)} → {formatTimeShort(arrive)} • {fmtDuration(leg.durationSec)}
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>

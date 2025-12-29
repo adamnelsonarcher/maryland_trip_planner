@@ -104,6 +104,21 @@ export function ItineraryView({
       setEditOpen(true);
       return;
     }
+    if (leg.dwellSource?.type === "implicitArrival") {
+      const placeId = leg.toPlaceId;
+      const name = trip.placesById[placeId]?.name ?? "stop";
+      const nextOverrides = { ...(scenario.dayOverridesByISO ?? {}) };
+      const existing = nextOverrides[dayISO] ?? { mode: "auto" as const, dwellBlocks: [] as DwellBlock[] };
+      const block: DwellBlock = { id: nanoid(), placeId, minutes: 120, label: `Time at ${name}` };
+      nextOverrides[dayISO] = { ...existing, dwellBlocks: [...(existing.dwellBlocks ?? []), block] };
+      onUpdateScenario({ dayOverridesByISO: nextOverrides });
+
+      setEditTarget({ type: "dwellBlock", dayISO, blockId: block.id });
+      setEditTitle(block.label ?? "Time spent");
+      setEditMinutes(block.minutes);
+      setEditOpen(true);
+      return;
+    }
   };
 
   const openAddAtDay = (dayISO: string) => {
@@ -418,13 +433,27 @@ export function ItineraryView({
                   trip={trip}
                   day={day}
                   dayTripLabel={label}
+                  locationLabel={
+                    day.totalDriveSec > 0
+                      ? "Driving day"
+                      : `At ${trip.placesById[baseByDay[day.dayISO] ?? ""]?.name ?? "Unknown"}`
+                  }
                   onSelectDay={(d) => {
                     onChangeSelectedDayISO(d);
                     onChangeView("day");
                   }}
                   onLegClick={onLegClick}
                   onDwellClick={(leg) => openEditForDwell(day.dayISO, leg as ScheduledLeg)}
-                  onInsertBetween={() => openAddAtDay(day.dayISO)}
+                  onInsertBetween={(dayISO, idx) => {
+                    const prev = day.legs[idx - 1];
+                    const next = day.legs[idx];
+                    const drive = [prev, next].find((l) => l && l.eventType !== "dwell");
+                    if (drive) {
+                      onLegClick?.(drive);
+                      return;
+                    }
+                    openAddAtDay(dayISO);
+                  }}
                 />
               );
             })
@@ -440,13 +469,27 @@ export function ItineraryView({
                     ? "PA day trip"
                     : null
               }
+              locationLabel={
+                selectedDay.totalDriveSec > 0
+                  ? "Driving day"
+                  : `At ${trip.placesById[baseByDay[selectedDay.dayISO] ?? ""]?.name ?? "Unknown"}`
+              }
               onSelectDay={(d) => {
                 onChangeSelectedDayISO(d);
                 onChangeView("day");
               }}
               onLegClick={onLegClick}
               onDwellClick={(leg) => openEditForDwell(selectedDayISO, leg as ScheduledLeg)}
-              onInsertBetween={() => openAddAtDay(selectedDayISO)}
+              onInsertBetween={(dayISO, idx) => {
+                const prev = selectedDay.legs[idx - 1];
+                const next = selectedDay.legs[idx];
+                const drive = [prev, next].find((l) => l && l.eventType !== "dwell");
+                if (drive) {
+                  onLegClick?.(drive);
+                  return;
+                }
+                openAddAtDay(dayISO);
+              }}
             />
           ) : null}
         </div>
@@ -478,6 +521,26 @@ export function ItineraryView({
 
           onUpdateScenario({ dayOverridesByISO: nextOverrides });
         }}
+        onDelete={
+          editTarget
+            ? () => {
+                const nextOverrides = { ...(scenario.dayOverridesByISO ?? {}) };
+                const existing =
+                  nextOverrides[editTarget.dayISO] ??
+                  ({ mode: "auto" as const, dwellBlocks: [] as DwellBlock[] });
+
+                if (editTarget.type === "dayTrip") {
+                  const { dayTrip: _dt, ...rest } = existing;
+                  void _dt;
+                  nextOverrides[editTarget.dayISO] = rest;
+                } else {
+                  const blocks = (existing.dwellBlocks ?? []).filter((b) => b.id !== editTarget.blockId);
+                  nextOverrides[editTarget.dayISO] = { ...existing, dwellBlocks: blocks };
+                }
+                onUpdateScenario({ dayOverridesByISO: nextOverrides });
+              }
+            : undefined
+        }
       />
 
       <AddEventModal

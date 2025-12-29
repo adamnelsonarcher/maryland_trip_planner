@@ -23,6 +23,7 @@ function normalizeScenario(trip: Trip, scenario: Scenario): Scenario {
     actualStartPlaceId: scenario.actualStartPlaceId ?? selectedOriginPlaceId,
     returnToPlaceId: scenario.returnToPlaceId ?? houstonId ?? selectedOriginPlaceId,
     returnStopPlaceIds: scenario.returnStopPlaceIds ?? [],
+    postAnnapolisStopPlaceIds: scenario.postAnnapolisStopPlaceIds ?? [],
     dayOverridesByISO: scenario.dayOverridesByISO ?? {},
     settings,
   };
@@ -63,6 +64,10 @@ export function normalizeTrip(trip: Trip): Trip {
   const t = trip as unknown as { startTimeHHMM?: string; endTimeHHMM?: string };
   const startTimeHHMM = t.startTimeHHMM ?? "08:00";
   const endTimeHHMM = t.endTimeHHMM ?? "23:59";
+  const t2 = trip as unknown as { returnDepartDateISO?: string; returnDepartTimeHHMM?: string };
+  const returnDepartDateISO = t2.returnDepartDateISO ?? trip.endDateISO;
+  // Default to the trip cutoff time; we clamp down to the computed latest allowed depart once Directions are available.
+  const returnDepartTimeHHMM = t2.returnDepartTimeHHMM ?? endTimeHHMM;
 
   const scenariosById = Object.fromEntries(
     Object.entries(trip.scenariosById).map(([id, s]) => [id, normalizeScenario(trip, s)]),
@@ -89,6 +94,8 @@ export function normalizeTrip(trip: Trip): Trip {
     ...trip,
     startTimeHHMM,
     endTimeHHMM,
+    returnDepartDateISO,
+    returnDepartTimeHHMM,
     scenariosById,
     activeScenarioId,
   };

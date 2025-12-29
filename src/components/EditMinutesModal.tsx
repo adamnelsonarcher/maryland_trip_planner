@@ -8,9 +8,10 @@ type Props = {
   minutes: number;
   onClose: () => void;
   onSave: (minutes: number) => void;
+  onDelete?: () => void;
 };
 
-export function EditMinutesModal({ open, title, minutes, onClose, onSave }: Props) {
+export function EditMinutesModal({ open, title, minutes, onClose, onSave, onDelete }: Props) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   if (!open) return null;
 
@@ -50,7 +51,20 @@ export function EditMinutesModal({ open, title, minutes, onClose, onSave }: Prop
             />
           </label>
 
-          <div className="mt-3 flex justify-end gap-2">
+          <div className="mt-3 flex justify-between gap-2">
+            {onDelete ? (
+              <button
+                className="rounded-md border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50"
+                onClick={() => {
+                  onDelete();
+                  onClose();
+                }}
+              >
+                Delete
+              </button>
+            ) : (
+              <div />
+            )}
             <button className="rounded-md border border-zinc-200 px-3 py-2 text-sm hover:bg-zinc-50" onClick={onClose}>
               Cancel
             </button>

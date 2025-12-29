@@ -50,6 +50,7 @@ export type Scenario = {
   returnToPlaceId?: string; // default: Houston for this trip
   intermediateStopPlaceIds: string[];
   returnStopPlaceIds?: string[]; // stops on the drive home to returnToPlaceId
+  postAnnapolisStopPlaceIds?: string[]; // stops between Annapolis and Lake House
   anchorPlaceIds: string[]; // ordered: e.g. Annapolis -> Lake House
   settings: ScenarioSettings;
   dayOverridesByISO?: Record<string, DayOverride>; // "YYYY-MM-DD" -> override
@@ -68,6 +69,8 @@ export type Trip = {
   endDateISO: string; // "YYYY-MM-DD"
   startTimeHHMM: string; // "HH:MM" (trip start time on start date)
   endTimeHHMM: string; // "HH:MM" (trip cutoff time on end date)
+  returnDepartDateISO: string; // "YYYY-MM-DD" (when you depart for the drive home)
+  returnDepartTimeHHMM: string; // "HH:MM"
   placesById: Record<string, Place>;
   scenariosById: Record<string, Scenario>;
   activeScenarioId: string;
@@ -95,7 +98,10 @@ export type ScheduledLeg = NormalizedDirectionsLeg & {
   arrivesAtDestination?: boolean;
   eventType?: "drive" | "dwell";
   label?: string;
-  dwellSource?: { type: "dayTrip" } | { type: "dwellBlock"; blockId: string };
+  dwellSource?:
+    | { type: "dayTrip" }
+    | { type: "dwellBlock"; blockId: string }
+    | { type: "implicitArrival" };
 };
 
 export type DayItinerary = {

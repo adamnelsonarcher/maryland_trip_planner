@@ -52,7 +52,55 @@ export function makeDefaultTrip(): Trip {
     tags: ["friend"],
   });
 
-  const places: Place[] = [houston, coloradoBend, annapolis, lakeHouse, nyc, paFriends];
+  // Recommended stops (route up)
+  const hotSprings = place({
+    name: "Hot Springs National Park",
+    address: "Hot Springs National Park, AR, USA",
+    location: { lat: 34.5219, lng: -93.0423 },
+    tags: ["park"],
+  });
+
+  const nashville = place({
+    name: "Nashville, TN",
+    address: "Nashville, TN, USA",
+    location: { lat: 36.1627, lng: -86.7816 },
+    tags: ["attraction"],
+  });
+
+  const mammothCave = place({
+    name: "Mammoth Cave National Park",
+    address: "Mammoth Cave National Park, KY, USA",
+    location: { lat: 37.186, lng: -86.1005 },
+    tags: ["park"],
+  });
+
+  const newRiverGorge = place({
+    name: "New River Gorge National Park",
+    address: "New River Gorge National Park & Preserve, WV, USA",
+    location: { lat: 38.0669, lng: -81.0796 },
+    tags: ["park"],
+  });
+
+  const shenandoah = place({
+    name: "Shenandoah National Park",
+    address: "Shenandoah National Park, VA, USA",
+    location: { lat: 38.5333, lng: -78.4356 },
+    tags: ["park"],
+  });
+
+  const places: Place[] = [
+    houston,
+    coloradoBend,
+    annapolis,
+    lakeHouse,
+    nyc,
+    paFriends,
+    hotSprings,
+    nashville,
+    mammothCave,
+    newRiverGorge,
+    shenandoah,
+  ];
   const placesById = Object.fromEntries(places.map((p) => [p.id, p]));
 
   const baseSettings = {
@@ -64,8 +112,9 @@ export function makeDefaultTrip(): Trip {
     actualStartPlaceId: coloradoBend.id,
     selectedOriginPlaceId: coloradoBend.id,
     returnToPlaceId: houston.id,
-    intermediateStopPlaceIds: [],
+    intermediateStopPlaceIds: [hotSprings.id, nashville.id, mammothCave.id],
     returnStopPlaceIds: [],
+    postAnnapolisStopPlaceIds: [],
     anchorPlaceIds: [annapolis.id, lakeHouse.id],
     settings: baseSettings,
     dayOverridesByISO: {},
@@ -80,8 +129,9 @@ export function makeDefaultTrip(): Trip {
     actualStartPlaceId: coloradoBend.id,
     selectedOriginPlaceId: houston.id,
     returnToPlaceId: houston.id,
-    intermediateStopPlaceIds: [],
+    intermediateStopPlaceIds: [hotSprings.id, nashville.id, mammothCave.id],
     returnStopPlaceIds: [],
+    postAnnapolisStopPlaceIds: [],
     anchorPlaceIds: [annapolis.id, lakeHouse.id],
     settings: baseSettings,
     dayOverridesByISO: {},
@@ -96,10 +146,13 @@ export function makeDefaultTrip(): Trip {
   return {
     id: nanoid(),
     title: "Maryland Trip Planner",
-    startDateISO: "2026-01-11",
+    startDateISO: "2026-01-10",
     endDateISO: "2026-01-19",
-    startTimeHHMM: "08:00",
+    startTimeHHMM: "21:00",
     endTimeHHMM: "23:59",
+    returnDepartDateISO: "2026-01-19",
+    // Start with the trip cutoff time; once Directions compute, we'll clamp down to the latest allowed depart.
+    returnDepartTimeHHMM: "23:59",
     placesById,
     scenariosById,
     activeScenarioId: scenarioBaseColoradoBend.id,
