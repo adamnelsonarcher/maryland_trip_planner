@@ -11,18 +11,24 @@ export type Place = {
 };
 
 export type ScenarioSettings = {
-  dailyStartTime: string; // "HH:MM"
-  maxDrivingHoursPerDay: number;
   bufferMinutesPerStop: number;
-  originStayDays: number; // full days to stay at the route origin before continuing
 };
 
 export type DayOverrideMode = "auto" | "rest";
+
+export type PresetDayTrip = "NYC" | "PA";
 
 export type DayOverride = {
   mode: DayOverrideMode;
   basePlaceId?: string; // where you're staying / exploring that day
   notes?: string;
+  presetDayTrip?: PresetDayTrip; // legacy (kept for migration)
+  dayTrip?: {
+    preset: PresetDayTrip;
+    startPlaceId?: string; // default: inferred base location for that day
+    endPlaceId?: string; // default: same as startPlaceId
+    dwellMinutes: number; // time spent at the destination
+  };
 };
 
 export type Scenario = {
@@ -32,6 +38,7 @@ export type Scenario = {
   selectedOriginPlaceId: string;
   returnToPlaceId?: string; // default: Houston for this trip
   intermediateStopPlaceIds: string[];
+  returnStopPlaceIds?: string[]; // stops on the drive home to returnToPlaceId
   anchorPlaceIds: string[]; // ordered: e.g. Annapolis -> Lake House
   settings: ScenarioSettings;
   dayOverridesByISO?: Record<string, DayOverride>; // "YYYY-MM-DD" -> override
@@ -48,6 +55,8 @@ export type Trip = {
   title: string;
   startDateISO: string; // "YYYY-MM-DD"
   endDateISO: string; // "YYYY-MM-DD"
+  startTimeHHMM: string; // "HH:MM" (trip start time on start date)
+  endTimeHHMM: string; // "HH:MM" (trip cutoff time on end date)
   placesById: Record<string, Place>;
   scenariosById: Record<string, Scenario>;
   activeScenarioId: string;
@@ -73,6 +82,8 @@ export type ScheduledLeg = NormalizedDirectionsLeg & {
   // When a nonstop drive crosses midnight, the schedule is split at 00:00.
   // Only the final chunk actually arrives at the destination place.
   arrivesAtDestination?: boolean;
+  eventType?: "drive" | "dwell";
+  label?: string;
 };
 
 export type DayItinerary = {

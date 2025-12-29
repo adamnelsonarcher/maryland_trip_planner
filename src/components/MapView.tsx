@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DirectionsRenderer, GoogleMap, MarkerF } from "@react-google-maps/api";
 
 import type { DayItinerary, Scenario, Trip } from "@/types/trip";
+import { computeBasePlaceByDay } from "@/lib/baseByDay";
 
 type Props = {
   trip: Trip;
@@ -14,6 +15,7 @@ type Props = {
   isMapsLoaded: boolean;
   directions: google.maps.DirectionsResult[];
   directionKinds?: ("up" | "home" | "other")[];
+  extraDirections?: google.maps.DirectionsResult[];
   placeIdsInOrder: string[];
   itinerary: DayItinerary[];
   view: "overview" | "day";
@@ -25,20 +27,15 @@ const containerStyle: React.CSSProperties = {
   height: "100%",
 };
 
-function computeBasePlaceByDay(itinerary: DayItinerary[], scenario: Scenario): Record<string, string | undefined> {
-  const map: Record<string, string | undefined> = {};
-  let current: string | undefined = scenario.actualStartPlaceId ?? scenario.selectedOriginPlaceId;
-
-  for (const day of itinerary) {
-    map[day.dayISO] = current;
-    if (day.legs.length > 0) {
-      // Legs are assigned to their arrival day; assume arrival at each leg's destination.
-      for (const leg of day.legs) {
-        if (leg.arrivesAtDestination !== false) current = leg.toPlaceId;
-      }
-    }
+function findPresetPlaceId(trip: Trip, preset: "NYC" | "PA"): string | undefined {
+  const lower = preset.toLowerCase();
+  if (preset === "NYC") {
+    return Object.values(trip.placesById).find((p) => p.name.toLowerCase().includes("new york"))?.id;
   }
-  return map;
+  if (preset === "PA") {
+    return Object.values(trip.placesById).find((p) => p.name.toLowerCase().includes("pa friends"))?.id;
+  }
+  return Object.values(trip.placesById).find((p) => p.name.toLowerCase().includes(lower))?.id;
 }
 
 export function MapView({
@@ -47,6 +44,7 @@ export function MapView({
   isMapsLoaded,
   directions,
   directionKinds,
+  extraDirections,
   placeIdsInOrder,
   itinerary,
   view,
@@ -59,6 +57,7 @@ export function MapView({
   const baseByDay = useMemo(() => computeBasePlaceByDay(itinerary, scenario), [itinerary, scenario]);
 
   const selectedDay = useMemo(() => itinerary.find((d) => d.dayISO === selectedDayISO), [itinerary, selectedDayISO]);
+  const selectedOverride = scenario.dayOverridesByISO?.[selectedDayISO];
 
   const overviewPoints = useMemo(() => {
     return placeIdsInOrder
@@ -121,7 +120,16 @@ export function MapView({
 
   const dayRouteIds = useMemo(() => {
     if (view !== "day") return [];
-    if (!selectedDay || selectedDay.legs.length === 0) return [];
+    if (!selectedDay) return [];
+    // If no driving that day but a preset day trip is selected, render a loop from base -> preset -> base.
+    if (selectedDay.legs.length === 0 && selectedOverride?.dayTrip) {
+      const baseId = selectedOverride.dayTrip.startPlaceId ?? baseByDay[selectedDayISO];
+      const presetPlaceId = findPresetPlaceId(trip, selectedOverride.dayTrip.preset);
+      const endId = selectedOverride.dayTrip.endPlaceId ?? baseId;
+      if (baseId && presetPlaceId && endId) return [baseId, presetPlaceId, endId];
+      return [];
+    }
+    if (selectedDay.legs.length === 0) return [];
     const ids: string[] = [selectedDay.legs[0]!.fromPlaceId];
     for (const leg of selectedDay.legs) ids.push(leg.toPlaceId);
     // Remove consecutive duplicates
@@ -132,7 +140,7 @@ export function MapView({
       out.push(id);
     }
     return out.filter((id) => Boolean(trip.placesById[id]));
-  }, [selectedDay, trip.placesById, view]);
+  }, [baseByDay, selectedDay, selectedDayISO, selectedOverride?.dayTrip, trip, view]);
 
   const dayStrokeColor = useMemo(() => {
     if (!selectedDay) return "#111827";
@@ -226,6 +234,19 @@ export function MapView({
                   />
                 );
               })
+            : null}
+
+          {view === "overview"
+            ? (extraDirections ?? []).map((d, idx) => (
+                <DirectionsRenderer
+                  key={`dt-${idx}`}
+                  directions={d}
+                  options={{
+                    suppressMarkers: true,
+                    polylineOptions: { strokeColor: "#111827", strokeOpacity: 0.85, strokeWeight: 4 },
+                  }}
+                />
+              ))
             : dayDirections ? (
                 <DirectionsRenderer
                   directions={dayDirections}

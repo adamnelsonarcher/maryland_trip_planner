@@ -15,19 +15,28 @@ function normalizeScenario(trip: Trip, scenario: Scenario): Scenario {
   const selectedOriginPlaceId = scenario.selectedOriginPlaceId;
 
   const settings = {
-    dailyStartTime: scenario.settings?.dailyStartTime ?? "08:00",
-    maxDrivingHoursPerDay: scenario.settings?.maxDrivingHoursPerDay ?? 6,
     bufferMinutesPerStop: scenario.settings?.bufferMinutesPerStop ?? 20,
-    originStayDays: scenario.settings?.originStayDays ?? 0,
   };
 
   const normalized: Scenario = {
     ...scenario,
     actualStartPlaceId: scenario.actualStartPlaceId ?? selectedOriginPlaceId,
     returnToPlaceId: scenario.returnToPlaceId ?? houstonId ?? selectedOriginPlaceId,
+    returnStopPlaceIds: scenario.returnStopPlaceIds ?? [],
     dayOverridesByISO: scenario.dayOverridesByISO ?? {},
     settings,
   };
+
+  // Migrate legacy presetDayTrip -> dayTrip
+  for (const [dayISO, o] of Object.entries(normalized.dayOverridesByISO ?? {})) {
+    if (o.presetDayTrip && !o.dayTrip) {
+      normalized.dayOverridesByISO![dayISO] = {
+        ...o,
+        dayTrip: { preset: o.presetDayTrip, dwellMinutes: 120 },
+      };
+      // Keep presetDayTrip for backward compat, but dayTrip becomes the source of truth.
+    }
+  }
 
   // Migration: rename scenarios to match current UI expectation.
   // This prevents stale names from old localStorage/share links.
@@ -45,6 +54,10 @@ function normalizeScenario(trip: Trip, scenario: Scenario): Scenario {
 }
 
 export function normalizeTrip(trip: Trip): Trip {
+  const t = trip as unknown as { startTimeHHMM?: string; endTimeHHMM?: string };
+  const startTimeHHMM = t.startTimeHHMM ?? "08:00";
+  const endTimeHHMM = t.endTimeHHMM ?? "23:59";
+
   const scenariosById = Object.fromEntries(
     Object.entries(trip.scenariosById).map(([id, s]) => [id, normalizeScenario(trip, s)]),
   );
@@ -68,6 +81,8 @@ export function normalizeTrip(trip: Trip): Trip {
 
   return {
     ...trip,
+    startTimeHHMM,
+    endTimeHHMM,
     scenariosById,
     activeScenarioId,
   };

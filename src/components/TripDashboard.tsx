@@ -11,10 +11,12 @@ import { clearTripLocalStorage, loadTripFromLocalStorage, saveTripToLocalStorage
 import { computeItinerary } from "@/lib/scheduler";
 import { normalizeDirectionsResponse } from "@/lib/directions";
 import { normalizeTrip } from "@/lib/normalizeTrip";
-import type { NormalizedDirectionsLeg, Place, Scenario, Trip } from "@/types/trip";
+import { computeBasePlaceByDay } from "@/lib/baseByDay";
+import type { NormalizedDirectionsLeg, Place, Scenario, ScheduledLeg, Trip } from "@/types/trip";
 import { ControlsPane } from "@/components/ControlsPane";
 import { MapView } from "@/components/MapView";
 import { ItineraryView } from "@/components/ItineraryView";
+import { AddStopModal } from "@/components/AddStopModal";
 
 const LIBRARIES: ("places")[] = ["places"];
 
@@ -33,6 +35,16 @@ type DirectionsState =
       legs: NormalizedDirectionsLeg[];
     }
   | { status: "error"; message: string };
+
+function findPresetPlaceId(trip: Trip, preset: "NYC" | "PA"): string | undefined {
+  if (preset === "NYC") {
+    return Object.values(trip.placesById).find((p) => p.name.toLowerCase().includes("new york"))?.id;
+  }
+  if (preset === "PA") {
+    return Object.values(trip.placesById).find((p) => p.name.toLowerCase().includes("pa friends"))?.id;
+  }
+  return undefined;
+}
 
 function getActiveScenario(trip: Trip): Scenario {
   const s = trip.scenariosById[trip.activeScenarioId];
@@ -96,7 +108,10 @@ function buildSegmentSpecs(trip: Trip, scenario: Scenario): SegmentSpec[] {
 
   // Return: lastAnchor -> returnTo (Houston)
   if (lastAnchor && returnTo && lastAnchor !== returnTo) {
-    specs.push({ ids: [lastAnchor, returnTo], kind: "home" });
+    const returnStops = (scenario.returnStopPlaceIds ?? []).filter(
+      (id) => id !== lastAnchor && id !== returnTo && Boolean(trip.placesById[id]),
+    );
+    specs.push({ ids: [lastAnchor, ...returnStops, returnTo], kind: "home" });
   }
 
   // Filter out any invalid ids.
@@ -131,6 +146,12 @@ export function TripDashboard() {
   const [resolvedError, setResolvedError] = useState<string | null>(null);
   const [itineraryView, setItineraryView] = useState<"overview" | "day">("overview");
   const [selectedDayISO, setSelectedDayISO] = useState<string>(() => makeDefaultTrip().startDateISO);
+  const [addStopOpen, setAddStopOpen] = useState(false);
+  const [addStopLeg, setAddStopLeg] = useState<ScheduledLeg | null>(null);
+  const [dayTripDirections, setDayTripDirections] = useState<google.maps.DirectionsResult[]>([]);
+  const [dayTripsByISO, setDayTripsByISO] = useState<
+    Record<string, { legs: NormalizedDirectionsLeg[]; dwellMinutes: number; destinationPlaceId: string }>
+  >({});
 
   const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? "";
   const { isLoaded, loadError } = useJsApiLoader({
@@ -299,8 +320,103 @@ export function TripDashboard() {
     if (directions.status !== "ready") {
       return computeItinerary({ trip, scenario, legs: [] });
     }
-    return computeItinerary({ trip, scenario, legs: directions.legs });
-  }, [trip, scenario, directions]);
+    return computeItinerary({ trip, scenario, legs: directions.legs, dayTripsByISO });
+  }, [trip, scenario, directions, dayTripsByISO]);
+
+  // Build day-trip Directions + normalized legs (cached) so:
+  // - schedule uses real drive times
+  // - overview map shows black polylines
+  useEffect(() => {
+    if (!apiKey || loadError || !isLoaded) return;
+    if (directions.status !== "ready") {
+      setDayTripDirections([]);
+      setDayTripsByISO({});
+      return;
+    }
+
+    const overrides = scenario.dayOverridesByISO ?? {};
+    const wanted = Object.entries(overrides).filter(([, o]) => Boolean(o.dayTrip));
+    if (wanted.length === 0) {
+      setDayTripDirections([]);
+      setDayTripsByISO({});
+      return;
+    }
+
+    const seq = ++requestSeq.current;
+
+    const mainOnly = computeItinerary({ trip, scenario, legs: directions.legs });
+    const baseByDay = computeBasePlaceByDay(mainOnly.days, scenario);
+
+    const service = new google.maps.DirectionsService();
+    const cache = (globalThis as unknown as {
+      __mtp_daytrip_cache?: Map<
+        string,
+        { response: google.maps.DirectionsResult; legs: NormalizedDirectionsLeg[] }
+      >;
+    }).__mtp_daytrip_cache;
+
+    (async () => {
+      const responses: google.maps.DirectionsResult[] = [];
+      const byISO: Record<string, { legs: NormalizedDirectionsLeg[]; dwellMinutes: number; destinationPlaceId: string }> =
+        {};
+
+      for (const [dayISO, o] of wanted) {
+        const plan = o.dayTrip!;
+        const destId = findPresetPlaceId(trip, plan.preset);
+        if (!destId) continue;
+
+        const startId = plan.startPlaceId ?? baseByDay[dayISO] ?? scenario.selectedOriginPlaceId;
+        const endId = plan.endPlaceId ?? startId;
+        if (!startId || !endId) continue;
+        if (!trip.placesById[startId] || !trip.placesById[destId] || !trip.placesById[endId]) continue;
+
+        const key = `dt:${startId}->${destId}->${endId}`;
+        const hit = cache?.get(key);
+        if (hit) {
+          responses.push(hit.response);
+          byISO[dayISO] = { legs: hit.legs, dwellMinutes: plan.dwellMinutes, destinationPlaceId: destId };
+          continue;
+        }
+
+        const result = await new Promise<google.maps.DirectionsResult>((resolve, reject) => {
+          service.route(
+            {
+              origin: trip.placesById[startId]!.location,
+              destination: trip.placesById[endId]!.location,
+              waypoints: [{ location: trip.placesById[destId]!.location, stopover: true }],
+              travelMode: google.maps.TravelMode.DRIVING,
+              optimizeWaypoints: false,
+            },
+            (res, status) => {
+              if (status !== "OK" || !res) reject(new Error(String(status)));
+              else resolve(res);
+            },
+          );
+        }).catch(() => null);
+
+        if (seq !== requestSeq.current) return;
+        if (!result) continue;
+
+        const legs = normalizeDirectionsResponse([startId, destId, endId], result);
+        responses.push(result);
+        byISO[dayISO] = { legs, dwellMinutes: plan.dwellMinutes, destinationPlaceId: destId };
+
+        const map =
+          cache ??
+          (((globalThis as unknown as {
+            __mtp_daytrip_cache?: Map<string, { response: google.maps.DirectionsResult; legs: NormalizedDirectionsLeg[] }>;
+          }).__mtp_daytrip_cache = new Map()) as Map<
+            string,
+            { response: google.maps.DirectionsResult; legs: NormalizedDirectionsLeg[] }
+          >);
+        map.set(key, { response: result, legs });
+      }
+
+      if (seq !== requestSeq.current) return;
+      setDayTripDirections(responses);
+      setDayTripsByISO(byISO);
+    })();
+  }, [apiKey, directions, isLoaded, loadError, scenario, trip]);
 
   useEffect(() => {
     // Keep selection valid if the trip window changes.
@@ -318,8 +434,9 @@ export function TripDashboard() {
   }, [mounted, trip]);
 
   return (
-    <div className="h-screen w-full bg-zinc-50 text-zinc-900">
-      <div className="h-full w-full grid grid-cols-1 md:grid-cols-[340px_minmax(0,1fr)_380px]">
+    <>
+      <div className="h-screen w-full bg-zinc-50 text-zinc-900">
+        <div className="h-full w-full grid grid-cols-1 md:grid-cols-[340px_minmax(0,1fr)_380px]">
         <ControlsPane
           trip={trip}
           scenario={scenario}
@@ -328,6 +445,7 @@ export function TripDashboard() {
           directionsStatus={directions.status}
           onSetActiveScenario={(id) => setTrip((t) => ({ ...t, activeScenarioId: id }))}
           onUpdateScenario={(patch) => setTrip((t) => updateScenario(t, scenario.id, patch))}
+          onUpdateTrip={(patch) => setTrip((t) => ({ ...t, ...patch }))}
           onUpsertPlace={(p) => setTrip((t) => upsertPlace(t, p))}
           onReset={() => {
             clearTripLocalStorage();
@@ -347,6 +465,7 @@ export function TripDashboard() {
           isMapsLoaded={isLoaded}
           directions={directions.status === "ready" ? directions.responses : []}
           directionKinds={directions.status === "ready" ? directions.kinds : []}
+          extraDirections={dayTripDirections}
           placeIdsInOrder={placeIdsInOrder}
           itinerary={itinerary.days}
           view={itineraryView}
@@ -362,9 +481,35 @@ export function TripDashboard() {
           selectedDayISO={selectedDayISO}
           onChangeView={setItineraryView}
           onChangeSelectedDayISO={setSelectedDayISO}
+          onLegClick={(leg) => {
+            setAddStopLeg(leg);
+            setAddStopOpen(true);
+          }}
         />
+        </div>
       </div>
-    </div>
+
+    <AddStopModal
+      open={addStopOpen}
+      isMapsLoaded={isLoaded}
+      leg={addStopLeg}
+      fromName={addStopLeg ? trip.placesById[addStopLeg.fromPlaceId]?.name ?? "Unknown" : ""}
+      toName={addStopLeg ? trip.placesById[addStopLeg.toPlaceId]?.name ?? "Unknown" : ""}
+      onClose={() => setAddStopOpen(false)}
+      onPlaceSelected={(place) => {
+        setTrip((t) => {
+          const s = getActiveScenario(t);
+          const next = upsertPlace(t, place);
+          // If you clicked a "home" leg, add to return stops; otherwise add to outbound intermediates.
+          const isHome = addStopLeg?.kind === "home";
+          const updatedScenario: Partial<Scenario> = isHome
+            ? { returnStopPlaceIds: [...(s.returnStopPlaceIds ?? []), place.id] }
+            : { intermediateStopPlaceIds: [...s.intermediateStopPlaceIds, place.id] };
+          return updateScenario(next, s.id, updatedScenario);
+        });
+      }}
+    />
+    </>
   );
 }
 

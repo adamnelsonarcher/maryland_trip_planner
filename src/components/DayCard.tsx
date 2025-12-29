@@ -13,11 +13,18 @@ function fmtDuration(sec: number) {
 type Props = {
   trip: Trip;
   day: DayItinerary;
+  onSelectDay?: (dayISO: string) => void;
+  onLegClick?: (leg: DayItinerary["legs"][number]) => void;
+  dayTripLabel?: string | null;
 };
 
-export function DayCard({ trip, day }: Props) {
+export function DayCard({ trip, day, onSelectDay, onLegClick, dayTripLabel }: Props) {
   return (
-    <div className="rounded-md border border-zinc-200 p-3">
+    <button
+      type="button"
+      onClick={() => onSelectDay?.(day.dayISO)}
+      className="w-full text-left rounded-md border border-zinc-200 p-3 hover:bg-zinc-50"
+    >
       <div className="flex items-start justify-between gap-2">
         <div>
           <div className="text-sm font-semibold">{formatDateShort(day.dayISO)}</div>
@@ -36,6 +43,13 @@ export function DayCard({ trip, day }: Props) {
         </div>
       )}
 
+      {dayTripLabel ? (
+        <div className="mt-3 rounded-md bg-zinc-50 p-2 border-l-4 border-zinc-900">
+          <div className="text-sm font-medium">{dayTripLabel}</div>
+          <div className="text-xs text-zinc-500">Preset day trip (you can change this in Day view).</div>
+        </div>
+      ) : null}
+
       {day.legs.length === 0 ? (
         <div className="mt-3 text-sm text-zinc-500">No driving scheduled.</div>
       ) : (
@@ -51,18 +65,26 @@ export function DayCard({ trip, day }: Props) {
                 : leg.kind === "home"
                   ? "border-l-4 border-orange-500"
                   : "border-l-4 border-zinc-900";
+            const isDwell = leg.eventType === "dwell";
             return (
               <div
                 key={`${leg.fromPlaceId}-${leg.toPlaceId}-${idx}`}
-                className={`rounded-md bg-zinc-50 p-2 ${color}`}
+                className={`rounded-md bg-zinc-50 p-2 ${color} cursor-pointer hover:bg-zinc-100`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!isDwell) onLegClick?.(leg);
+                }}
+                role="button"
+                tabIndex={0}
               >
                 <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <div className="truncate text-sm font-medium">
-                      {from} → {to}
+                      {isDwell ? leg.label ?? `Time at ${to}` : `${from} → ${to}`}
                     </div>
                     <div className="text-xs text-zinc-500">
-                      {formatTimeShort(depart)} → {formatTimeShort(arrive)} • {fmtDuration(leg.durationSec)}
+                      {formatTimeShort(depart)} → {formatTimeShort(arrive)}
+                      {isDwell ? "" : ` • ${fmtDuration(leg.durationSec)}`}
                     </div>
                   </div>
                 </div>
@@ -71,7 +93,7 @@ export function DayCard({ trip, day }: Props) {
           })}
         </div>
       )}
-    </div>
+    </button>
   );
 }
 

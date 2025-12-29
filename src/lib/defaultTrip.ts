@@ -56,10 +56,7 @@ export function makeDefaultTrip(): Trip {
   const placesById = Object.fromEntries(places.map((p) => [p.id, p]));
 
   const baseSettings = {
-    dailyStartTime: "08:00",
-    maxDrivingHoursPerDay: 6,
     bufferMinutesPerStop: 20,
-    originStayDays: 0,
   };
 
   const scenarioBaseColoradoBend = scenario({
@@ -68,6 +65,7 @@ export function makeDefaultTrip(): Trip {
     selectedOriginPlaceId: coloradoBend.id,
     returnToPlaceId: houston.id,
     intermediateStopPlaceIds: [],
+    returnStopPlaceIds: [],
     anchorPlaceIds: [annapolis.id, lakeHouse.id],
     settings: baseSettings,
     dayOverridesByISO: {},
@@ -83,6 +81,7 @@ export function makeDefaultTrip(): Trip {
     selectedOriginPlaceId: houston.id,
     returnToPlaceId: houston.id,
     intermediateStopPlaceIds: [],
+    returnStopPlaceIds: [],
     anchorPlaceIds: [annapolis.id, lakeHouse.id],
     settings: baseSettings,
     dayOverridesByISO: {},
@@ -99,6 +98,8 @@ export function makeDefaultTrip(): Trip {
     title: "Maryland Trip Planner",
     startDateISO: "2026-01-11",
     endDateISO: "2026-01-19",
+    startTimeHHMM: "08:00",
+    endTimeHHMM: "23:59",
     placesById,
     scenariosById,
     activeScenarioId: scenarioBaseColoradoBend.id,

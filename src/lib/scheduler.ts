@@ -11,6 +11,14 @@ export type ComputeItineraryInput = {
   trip: Trip;
   scenario: Scenario;
   legs: NormalizedDirectionsLeg[];
+  dayTripsByISO?: Record<
+    string,
+    {
+      legs: NormalizedDirectionsLeg[];
+      dwellMinutes: number;
+      destinationPlaceId: string;
+    }
+  >;
 };
 
 export type ComputeItineraryOutput = {
@@ -24,10 +32,6 @@ function dateISOFromDate(d: Date) {
 
 function nextMidnight(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1, 0, 0, 0, 0);
-}
-
-function endOfDay(d: Date) {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
 }
 
 function findLastAnchorId(scenario: Scenario): string | undefined {
@@ -54,7 +58,9 @@ function pushChunk(days: DayItinerary[], dayISO: string, chunk: ScheduledLeg) {
   const idx = days.findIndex((d) => d.dayISO === dayISO);
   if (idx < 0) return false;
   days[idx]!.legs.push(chunk);
-  days[idx]!.totalDriveSec += Math.max(0, chunk.durationSec);
+  if (chunk.eventType !== "dwell") {
+    days[idx]!.totalDriveSec += Math.max(0, chunk.durationSec);
+  }
   return true;
 }
 
@@ -119,12 +125,13 @@ function scheduleOneLegMidnightSplit(params: {
 
 function computeLatestReturnStart(params: {
   tripEndISO: string;
+  tripEndTimeHHMM: string;
   returnLegs: NormalizedDirectionsLeg[];
   bufferSec: number;
 }): Date {
-  const { tripEndISO, returnLegs, bufferSec } = params;
-  // Target: arrive by end-of-day on trip end date.
-  const cutoff = endOfDay(makeLocalDateTime(tripEndISO, "00:00"));
+  const { tripEndISO, tripEndTimeHHMM, returnLegs, bufferSec } = params;
+  // Target: arrive by the trip end time on the end date.
+  const cutoff = makeLocalDateTime(tripEndISO, tripEndTimeHHMM);
 
   const totalDrive = returnLegs.reduce((sum, l) => sum + Math.max(0, l.durationSec), 0);
   const interLegBuffers = Math.max(0, returnLegs.length - 1) * bufferSec;
@@ -153,6 +160,7 @@ function computeEarliestReturnStartDayIdx(params: {
 }
 
 function scheduleLegsForward(params: {
+  dayStartTimeHHMM: string;
   scenario: Scenario;
   days: DayItinerary[];
   startDayIdx: number;
@@ -161,15 +169,15 @@ function scheduleLegsForward(params: {
   bufferSec: number;
   kind: "up" | "home" | "other";
 }): { endDayIdx: number; spills: boolean } {
-  const { scenario, days, startDayIdx, startDepart, legs, bufferSec, kind } = params;
+  const { dayStartTimeHHMM, scenario, days, startDayIdx, startDepart, legs, bufferSec, kind } = params;
 
   let dayIdx = startDayIdx;
-  let depart = startDepart ?? makeLocalDateTime(days[dayIdx]!.dayISO, scenario.settings.dailyStartTime);
+  let depart = startDepart ?? makeLocalDateTime(days[dayIdx]!.dayISO, dayStartTimeHHMM);
 
   const advanceDay = () => {
     if (dayIdx >= days.length - 1) return false;
     dayIdx += 1;
-    depart = makeLocalDateTime(days[dayIdx]!.dayISO, scenario.settings.dailyStartTime);
+    depart = makeLocalDateTime(days[dayIdx]!.dayISO, dayStartTimeHHMM);
     return true;
   };
 
@@ -198,6 +206,7 @@ export function computeItinerary({
   trip,
   scenario,
   legs,
+  dayTripsByISO,
 }: ComputeItineraryInput): ComputeItineraryOutput {
   const dayCount = diffDaysInclusive(trip.startDateISO, trip.endDateISO);
   const days: DayItinerary[] = Array.from({ length: dayCount }, (_, idx) => ({
@@ -213,7 +222,6 @@ export function computeItinerary({
   }
 
   const bufferSec = Math.max(0, Math.round(scenario.settings.bufferMinutesPerStop * 60));
-  const originStayDays = Math.max(0, Math.floor(scenario.settings.originStayDays ?? 0));
   // Note: we intentionally do NOT add placeholder warnings for "undeclared" days.
 
   let spillsBeyondEndDate = false;
@@ -224,22 +232,11 @@ export function computeItinerary({
   const returnLegs = legs.slice(returnStartIdx);
 
   // 2) Apply origin stay days at the beginning as "unspecified/stay" days.
-  let dayIdx = 0;
-  for (let s = 0; s < originStayDays; s++) {
-    // Respect explicit rest days: if user already set rest, we treat it as consumed.
-    while (dayIdx < days.length && isRestDay(scenario, days[dayIdx]!.dayISO)) {
-      days[dayIdx]!.warnings.push("Marked as Rest/Explore day — no driving scheduled.");
-      dayIdx += 1;
-    }
-    if (dayIdx >= days.length) {
-      spillsBeyondEndDate = true;
-      break;
-    }
-    dayIdx += 1;
-  }
+  const dayIdx = 0;
 
   // 3) Schedule outbound as early as possible starting at current dayIdx.
   const outbound = scheduleLegsForward({
+    dayStartTimeHHMM: trip.startTimeHHMM,
     scenario,
     days,
     startDayIdx: Math.min(dayIdx, days.length - 1),
@@ -263,18 +260,20 @@ export function computeItinerary({
   // 5) Schedule return segment starting at returnStartDayIdx.
   const latestReturnStart = computeLatestReturnStart({
     tripEndISO: trip.endDateISO,
+    tripEndTimeHHMM: trip.endTimeHHMM,
     returnLegs,
     bufferSec,
   });
 
   // If outbound ends after the latest possible return start, we can't finish by end of trip.
   const outboundEndDay = days[outbound.endDayIdx]?.dayISO ?? trip.startDateISO;
-  const outboundEndAt = makeLocalDateTime(outboundEndDay, scenario.settings.dailyStartTime);
+  const outboundEndAt = makeLocalDateTime(outboundEndDay, trip.startTimeHHMM);
   if (outboundEndAt.getTime() > latestReturnStart.getTime()) {
     spillsBeyondEndDate = true;
   }
 
   const ret = scheduleLegsForward({
+    dayStartTimeHHMM: trip.startTimeHHMM,
     scenario,
     days,
     startDayIdx: Math.min(returnStartDayIdx, days.length - 1),
@@ -284,6 +283,57 @@ export function computeItinerary({
     kind: "home",
   });
   spillsBeyondEndDate ||= ret.spills;
+
+  // 6) Insert day trips (drive -> dwell -> drive) with real durations.
+  if (dayTripsByISO) {
+    for (const [dayISO, dt] of Object.entries(dayTripsByISO)) {
+      const idx = days.findIndex((d) => d.dayISO === dayISO);
+      if (idx < 0) continue;
+      if (dt.legs.length === 0) continue;
+
+      // Start day trip at trip start time on that day.
+      let depart = makeLocalDateTime(dayISO, trip.startTimeHHMM);
+      for (let i = 0; i < dt.legs.length; i++) {
+        const leg = dt.legs[i]!;
+        const res = scheduleOneLegMidnightSplit({
+          days,
+          scenario,
+          depart,
+          leg,
+          bufferSec,
+          kind: "other",
+        });
+        if (res.spills) spillsBeyondEndDate = true;
+        depart = res.departAfter;
+
+        // After arriving at the day trip destination (first leg), add dwell.
+        if (i === 0) {
+          const dwellSec = Math.max(0, Math.round(dt.dwellMinutes * 60));
+          if (dwellSec > 0) {
+            const dwellStart = new Date(depart.getTime() - bufferSec * 1000);
+            const dwellEnd = new Date(dwellStart.getTime() + dwellSec * 1000);
+            const dwellDayISO = dateISOFromDate(dwellStart);
+            const dwell: ScheduledLeg = {
+              fromPlaceId: dt.destinationPlaceId,
+              toPlaceId: dt.destinationPlaceId,
+              durationSec: dwellSec,
+              distanceMeters: 0,
+              departAtISO: dwellStart.toISOString(),
+              arriveAtISO: dwellEnd.toISOString(),
+              dayISO: dwellDayISO,
+              bufferSec: 0,
+              kind: "other",
+              arrivesAtDestination: true,
+              eventType: "dwell",
+              label: `Time at ${trip.placesById[dt.destinationPlaceId]?.name ?? "stop"}`,
+            };
+            pushChunk(days, dwellDayISO, dwell);
+            depart = dwellEnd;
+          }
+        }
+      }
+    }
+  }
 
   if (spillsBeyondEndDate) {
     days[days.length - 1]!.warnings.push(
