@@ -4,7 +4,7 @@ import type { Place, Scenario, Trip } from "@/types/trip";
 import { ScenarioSelector } from "@/components/ScenarioSelector";
 import { StopsList } from "@/components/StopsList";
 import { PlaceSearchBox } from "@/components/PlaceSearchBox";
-import { addDays, diffDaysInclusive } from "@/lib/time";
+import { addDays, diffDaysInclusive, formatDateShort } from "@/lib/time";
 
 type Props = {
   trip: Trip;
@@ -34,6 +34,8 @@ export function ControlsPane({
   const originOptions = Object.values(trip.placesById).filter((p) => p.name.includes("Houston") || p.name.includes("Colorado Bend"));
   const dayCount = diffDaysInclusive(trip.startDateISO, trip.endDateISO);
   const dayOptions = Array.from({ length: dayCount }, (_, i) => addDays(trip.startDateISO, i));
+  const actualStartId = scenario.actualStartPlaceId ?? scenario.selectedOriginPlaceId;
+  const routeOriginName = trip.placesById[scenario.selectedOriginPlaceId]?.name ?? "origin";
 
   return (
     <aside className="border-r border-zinc-200 bg-white h-full overflow-y-auto">
@@ -72,10 +74,26 @@ export function ControlsPane({
         <ScenarioSelector trip={trip} activeScenarioId={scenario.id} onChange={onSetActiveScenario} />
 
         <div className="rounded-md border border-zinc-200 p-3">
-          <div className="text-sm font-semibold">Origin</div>
+          <div className="text-sm font-semibold">Start + Route origin</div>
           <div className="mt-2">
+            <div className="text-xs text-zinc-600">Actual start (where you physically begin)</div>
             <select
-              className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm"
+              className="mt-1 w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm"
+              value={actualStartId}
+              onChange={(e) => onUpdateScenario({ actualStartPlaceId: e.target.value })}
+            >
+              {originOptions.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="mt-3">
+            <div className="text-xs text-zinc-600">Route origin (where the main plan starts)</div>
+            <select
+              className="mt-1 w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm"
               value={scenario.selectedOriginPlaceId}
               onChange={(e) => onUpdateScenario({ selectedOriginPlaceId: e.target.value })}
             >
@@ -86,6 +104,11 @@ export function ControlsPane({
               ))}
             </select>
           </div>
+          {actualStartId !== scenario.selectedOriginPlaceId && (
+            <div className="mt-2 text-xs text-zinc-500">
+              We’ll prepend a leg from actual start → route origin (e.g. Colorado Bend → Houston).
+            </div>
+          )}
         </div>
 
         <div className="rounded-md border border-zinc-200 p-3">
@@ -150,7 +173,7 @@ export function ControlsPane({
               >
                 {dayOptions.map((d) => (
                   <option key={d} value={d}>
-                    {d}
+                    {formatDateShort(d)}
                   </option>
                 ))}
               </select>
@@ -173,7 +196,7 @@ export function ControlsPane({
               >
                 {dayOptions.map((d) => (
                   <option key={d} value={d}>
-                    {d}
+                    {formatDateShort(d)}
                   </option>
                 ))}
               </select>
@@ -234,6 +257,25 @@ export function ControlsPane({
                     settings: {
                       ...scenario.settings,
                       bufferMinutesPerStop: Number(e.target.value),
+                    },
+                  })
+                }
+              />
+            </label>
+
+            <label className="flex flex-col gap-1 col-span-2">
+              <span className="text-xs text-zinc-600">Days staying in {routeOriginName}</span>
+              <input
+                className="rounded-md border border-zinc-200 px-2 py-1 text-sm"
+                type="number"
+                min={0}
+                step={1}
+                value={scenario.settings.originStayDays}
+                onChange={(e) =>
+                  onUpdateScenario({
+                    settings: {
+                      ...scenario.settings,
+                      originStayDays: Number(e.target.value),
                     },
                   })
                 }

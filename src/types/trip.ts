@@ -14,15 +14,27 @@ export type ScenarioSettings = {
   dailyStartTime: string; // "HH:MM"
   maxDrivingHoursPerDay: number;
   bufferMinutesPerStop: number;
+  originStayDays: number; // full days to stay at the route origin before continuing
+};
+
+export type DayOverrideMode = "auto" | "rest";
+
+export type DayOverride = {
+  mode: DayOverrideMode;
+  basePlaceId?: string; // where you're staying / exploring that day
+  notes?: string;
 };
 
 export type Scenario = {
   id: string;
   name: string;
+  actualStartPlaceId?: string; // physical start location (can differ from route origin)
   selectedOriginPlaceId: string;
+  returnToPlaceId?: string; // default: Houston for this trip
   intermediateStopPlaceIds: string[];
   anchorPlaceIds: string[]; // ordered: e.g. Annapolis -> Lake House
   settings: ScenarioSettings;
+  dayOverridesByISO?: Record<string, DayOverride>; // "YYYY-MM-DD" -> override
 
   // Phase 5+ (not used for v1 scheduling yet)
   includeNYCDayTrip?: boolean;

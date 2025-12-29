@@ -59,30 +59,39 @@ export function makeDefaultTrip(): Trip {
     dailyStartTime: "08:00",
     maxDrivingHoursPerDay: 6,
     bufferMinutesPerStop: 20,
+    originStayDays: 0,
   };
 
-  const scenarioHouston = scenario({
-    name: "Base Plan (Start: Houston)",
-    selectedOriginPlaceId: houston.id,
+  const scenarioBaseColoradoBend = scenario({
+    name: "Base Plan (Start: Colorado Bend)",
+    actualStartPlaceId: coloradoBend.id,
+    selectedOriginPlaceId: coloradoBend.id,
+    returnToPlaceId: houston.id,
     intermediateStopPlaceIds: [],
     anchorPlaceIds: [annapolis.id, lakeHouse.id],
     settings: baseSettings,
+    dayOverridesByISO: {},
     includeNYCDayTrip: false,
     includePADayTrip: false,
   });
 
-  const scenarioColoradoBend = scenario({
-    name: "Alt Start (Colorado Bend)",
-    selectedOriginPlaceId: coloradoBend.id,
+  const scenarioAltStopHoustonFirst = scenario({
+    name: "Alt Plan (Stop in Houston first)",
+    // Physically start in Colorado Bend, but route begins in Houston,
+    // so we prepend Colorado Bend -> Houston before the main route.
+    actualStartPlaceId: coloradoBend.id,
+    selectedOriginPlaceId: houston.id,
+    returnToPlaceId: houston.id,
     intermediateStopPlaceIds: [],
     anchorPlaceIds: [annapolis.id, lakeHouse.id],
     settings: baseSettings,
+    dayOverridesByISO: {},
     includeNYCDayTrip: false,
     includePADayTrip: false,
   });
 
   const scenariosById = Object.fromEntries(
-    [scenarioHouston, scenarioColoradoBend].map((s) => [s.id, s]),
+    [scenarioBaseColoradoBend, scenarioAltStopHoustonFirst].map((s) => [s.id, s]),
   );
 
   return {
@@ -92,7 +101,7 @@ export function makeDefaultTrip(): Trip {
     endDateISO: "2026-01-19",
     placesById,
     scenariosById,
-    activeScenarioId: scenarioHouston.id,
+    activeScenarioId: scenarioBaseColoradoBend.id,
   };
 }
 

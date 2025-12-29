@@ -9,7 +9,7 @@ type Props = {
   trip: Trip;
   scenario: Scenario;
   isMapsLoaded: boolean;
-  directions: google.maps.DirectionsResult | null;
+  directions: google.maps.DirectionsResult[];
   placeIdsInOrder: string[];
 };
 
@@ -63,15 +63,17 @@ export function MapView({ trip, isMapsLoaded, directions, placeIdsInOrder }: Pro
             <MarkerF key={p.id} position={p.location} label={idx === 0 ? "O" : idx === points.length - 1 ? "D" : `${idx}`} />
           ))}
 
-          {directions && (
+          {directions.map((d, idx) => (
             <DirectionsRenderer
-              directions={directions}
+              // eslint-disable-next-line react/no-array-index-key
+              key={idx}
+              directions={d}
               options={{
                 suppressMarkers: true,
                 polylineOptions: { strokeColor: "#111827", strokeOpacity: 0.9, strokeWeight: 5 },
               }}
             />
-          )}
+          ))}
         </GoogleMap>
       )}
     </main>

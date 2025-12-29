@@ -21,7 +21,11 @@ type DirectionsState =
   | { status: "idle" }
   | { status: "missing_api_key" }
   | { status: "loading" }
-  | { status: "ready"; response: google.maps.DirectionsResult; legs: NormalizedDirectionsLeg[] }
+  | {
+      status: "ready";
+      responses: google.maps.DirectionsResult[];
+      legs: NormalizedDirectionsLeg[];
+    }
   | { status: "error"; message: string };
 
 function getActiveScenario(trip: Trip): Scenario {
@@ -33,11 +37,56 @@ function getActiveScenario(trip: Trip): Scenario {
 }
 
 function buildPlaceOrder(trip: Trip, scenario: Scenario) {
-  const placeIds: string[] = [];
-  placeIds.push(scenario.selectedOriginPlaceId);
-  placeIds.push(...scenario.intermediateStopPlaceIds);
-  placeIds.push(...scenario.anchorPlaceIds);
-  return placeIds.filter((id) => Boolean(trip.placesById[id]));
+  // Marker order (deduped) for map view.
+  const actualStart = scenario.actualStartPlaceId ?? scenario.selectedOriginPlaceId;
+  const routeOrigin = scenario.selectedOriginPlaceId;
+  const returnTo =
+    scenario.returnToPlaceId ??
+    Object.values(trip.placesById).find((p) => p.name.includes("Houston"))?.id ??
+    routeOrigin;
+
+  const all = [
+    actualStart,
+    routeOrigin,
+    ...scenario.intermediateStopPlaceIds,
+    ...scenario.anchorPlaceIds,
+    returnTo,
+  ].filter((id) => Boolean(id) && Boolean(trip.placesById[id]));
+
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const id of all) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    deduped.push(id);
+  }
+  return deduped;
+}
+
+function buildSegments(trip: Trip, scenario: Scenario): string[][] {
+  const actualStart = scenario.actualStartPlaceId ?? scenario.selectedOriginPlaceId;
+  const routeOrigin = scenario.selectedOriginPlaceId;
+  const returnTo =
+    scenario.returnToPlaceId ??
+    Object.values(trip.placesById).find((p) => p.name.includes("Houston"))?.id ??
+    routeOrigin;
+
+  const segments: string[][] = [];
+
+  if (actualStart && routeOrigin && actualStart !== routeOrigin) {
+    segments.push([actualStart, routeOrigin]);
+  }
+
+  // Main route always ends at returnTo (Houston) and starts at routeOrigin.
+  const mainWaypoints = [...scenario.intermediateStopPlaceIds, ...scenario.anchorPlaceIds].filter(
+    (id) => id !== routeOrigin && id !== returnTo,
+  );
+  segments.push([routeOrigin, ...mainWaypoints, returnTo]);
+
+  // Filter out any invalid ids.
+  return segments
+    .map((seg) => seg.filter((id) => Boolean(trip.placesById[id])))
+    .filter((seg) => seg.length >= 2);
 }
 
 function updateScenario(trip: Trip, scenarioId: string, patch: Partial<Scenario>): Trip {
@@ -99,18 +148,20 @@ export function TripDashboard() {
 
   const scenario = useMemo(() => getActiveScenario(trip), [trip]);
   const placeIdsInOrder = useMemo(() => buildPlaceOrder(trip, scenario), [trip, scenario]);
+  const segments = useMemo(() => buildSegments(trip, scenario), [trip, scenario]);
 
   const currentKey = useMemo(() => {
-    if (placeIdsInOrder.length < 2) return null;
-    const keyParts = placeIdsInOrder
-      .map((id) => {
-        const p = trip.placesById[id]!;
-        return `${p.location.lat.toFixed(5)},${p.location.lng.toFixed(5)}`;
-      })
-      .join("|");
-
-    return `v1:${keyParts}`;
-  }, [placeIdsInOrder, trip.placesById]);
+    if (segments.length === 0) return null;
+    const segKeys = segments.map((seg) =>
+      seg
+        .map((id) => {
+          const p = trip.placesById[id]!;
+          return `${p.location.lat.toFixed(5)},${p.location.lng.toFixed(5)}`;
+        })
+        .join("|"),
+    );
+    return `v2:${segKeys.join("||")}`;
+  }, [segments, trip.placesById]);
 
   const directions: DirectionsState = useMemo(() => {
     if (!apiKey) return { status: "missing_api_key" };
@@ -118,7 +169,11 @@ export function TripDashboard() {
     if (!isLoaded) return { status: "loading" };
     if (!currentKey) return { status: "idle" };
     if (resolvedKey === currentKey && resolvedResponse) {
-      return { status: "ready", response: resolvedResponse, legs: resolvedLegs };
+      const cachedMulti = (
+        (window as unknown as { __mtp_directions_cache?: Map<string, DirectionsState> }).__mtp_directions_cache
+      )?.get(currentKey);
+      const responses = cachedMulti?.status === "ready" ? cachedMulti.responses : [resolvedResponse];
+      return { status: "ready", responses, legs: resolvedLegs };
     }
     if (resolvedKey === currentKey && resolvedError) {
       return { status: "error", message: resolvedError };
@@ -130,13 +185,15 @@ export function TripDashboard() {
   useEffect(() => {
     if (!apiKey || loadError || !isLoaded) return;
     if (!currentKey) return;
+    if (segments.length === 0) return;
 
     const cached = (window as unknown as { __mtp_directions_cache?: Map<string, DirectionsState> })
       .__mtp_directions_cache;
     const hit = cached?.get(currentKey);
     if (hit?.status === "ready") {
       setResolvedKey(currentKey);
-      setResolvedResponse(hit.response);
+      // v2 stores multi-response, but keep backward-compat with old cache entries.
+      setResolvedResponse((hit as unknown as { response?: google.maps.DirectionsResult; responses?: google.maps.DirectionsResult[] }).responses?.[0] ?? (hit as unknown as { response?: google.maps.DirectionsResult }).response ?? null);
       setResolvedLegs(hit.legs);
       setResolvedError(null);
       return;
@@ -151,54 +208,69 @@ export function TripDashboard() {
 
     const seq = ++requestSeq.current;
     const timer = window.setTimeout(() => {
-      const origin = trip.placesById[placeIdsInOrder[0]!]!;
-      const destination = trip.placesById[placeIdsInOrder[placeIdsInOrder.length - 1]!]!;
-      const waypointIds = placeIdsInOrder.slice(1, -1);
-
       const service = new google.maps.DirectionsService();
-      service.route(
-        {
-          origin: origin.location,
-          destination: destination.location,
-          waypoints: waypointIds.map((id) => ({ location: trip.placesById[id]!.location, stopover: true })),
-          travelMode: google.maps.TravelMode.DRIVING,
-          optimizeWaypoints: false,
-        },
-        (result, status) => {
-          if (seq !== requestSeq.current) return;
 
-          if (status !== "OK" || !result) {
-            const message = `Directions error: ${status}`;
-            setResolvedKey(currentKey);
-            setResolvedResponse(null);
-            setResolvedLegs([]);
-            setResolvedError(message);
+      const responses: google.maps.DirectionsResult[] = [];
+      const allLegs: NormalizedDirectionsLeg[] = [];
 
-            const map =
-              cached ??
-              ((window as unknown as { __mtp_directions_cache?: Map<string, DirectionsState> })
-                .__mtp_directions_cache = new Map());
-            map.set(currentKey, { status: "error", message });
-            return;
-          }
-
-          const normalizedLegs = normalizeDirectionsResponse(placeIdsInOrder, result);
+      const runSegment = (segIdx: number) => {
+        if (segIdx >= segments.length) {
           setResolvedKey(currentKey);
-          setResolvedResponse(result);
-          setResolvedLegs(normalizedLegs);
+          // Store first response for backward compat; MapView will render from the normalized state we compute below.
+          setResolvedResponse(responses[0] ?? null);
+          setResolvedLegs(allLegs);
           setResolvedError(null);
 
           const map =
             cached ??
             ((window as unknown as { __mtp_directions_cache?: Map<string, DirectionsState> })
               .__mtp_directions_cache = new Map());
-          map.set(currentKey, { status: "ready", response: result, legs: normalizedLegs });
-        },
-      );
+          map.set(currentKey, { status: "ready", responses, legs: allLegs });
+          return;
+        }
+
+        const seg = segments[segIdx]!;
+        const originId = seg[0]!;
+        const destId = seg[seg.length - 1]!;
+        const waypointIds = seg.slice(1, -1);
+
+        service.route(
+          {
+            origin: trip.placesById[originId]!.location,
+            destination: trip.placesById[destId]!.location,
+            waypoints: waypointIds.map((id) => ({ location: trip.placesById[id]!.location, stopover: true })),
+            travelMode: google.maps.TravelMode.DRIVING,
+            optimizeWaypoints: false,
+          },
+          (result, status) => {
+            if (seq !== requestSeq.current) return;
+            if (status !== "OK" || !result) {
+              const message = `Directions error: ${status}`;
+              setResolvedKey(currentKey);
+              setResolvedResponse(null);
+              setResolvedLegs([]);
+              setResolvedError(message);
+
+              const map =
+                cached ??
+                ((window as unknown as { __mtp_directions_cache?: Map<string, DirectionsState> })
+                  .__mtp_directions_cache = new Map());
+              map.set(currentKey, { status: "error", message });
+              return;
+            }
+
+            responses.push(result);
+            allLegs.push(...normalizeDirectionsResponse(seg, result));
+            runSegment(segIdx + 1);
+          },
+        );
+      };
+
+      runSegment(0);
     }, 750);
 
     return () => window.clearTimeout(timer);
-  }, [apiKey, currentKey, isLoaded, loadError, placeIdsInOrder, trip.placesById]);
+  }, [apiKey, currentKey, isLoaded, loadError, segments, trip.placesById]);
 
   const itinerary = useMemo(() => {
     if (directions.status !== "ready") {
@@ -238,11 +310,16 @@ export function TripDashboard() {
           trip={trip}
           scenario={scenario}
           isMapsLoaded={isLoaded}
-          directions={directions.status === "ready" ? directions.response : null}
+          directions={directions.status === "ready" ? directions.responses : []}
           placeIdsInOrder={placeIdsInOrder}
         />
 
-        <ItineraryView trip={trip} scenario={scenario} itinerary={itinerary.days} />
+        <ItineraryView
+          trip={trip}
+          scenario={scenario}
+          itinerary={itinerary.days}
+          onUpdateScenario={(patch) => setTrip((t) => updateScenario(t, scenario.id, patch))}
+        />
       </div>
     </div>
   );
