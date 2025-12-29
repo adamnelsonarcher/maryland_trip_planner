@@ -88,63 +88,6 @@ export function ControlsPane({
         <ScenarioSelector trip={trip} activeScenarioId={scenario.id} onChange={onSetActiveScenario} />
 
         <div className="rounded-md border border-zinc-200 p-3">
-          <div className="text-sm font-semibold">Save / Load</div>
-          <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <button
-              type="button"
-              className="rounded-md bg-zinc-900 px-3 py-2 text-sm text-white hover:bg-zinc-800"
-              onClick={() => {
-                setImportError(null);
-                const text = encodeTripExportV1(trip);
-                downloadTextFile({ filename: makeTripExportFilename(trip), text });
-              }}
-            >
-              Download JSON
-            </button>
-            <button
-              type="button"
-              className="rounded-md border border-zinc-200 px-3 py-2 text-sm hover:bg-zinc-50"
-              onClick={() => {
-                setImportError(null);
-                fileRef.current?.click();
-              }}
-            >
-              Load JSON
-            </button>
-          </div>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="application/json,.json"
-            className="hidden"
-            onChange={async (e) => {
-              const f = e.target.files?.[0];
-              // Allow re-selecting the same file after a load.
-              e.currentTarget.value = "";
-              if (!f) return;
-              try {
-                const text = await f.text();
-                const parsed = decodeTripJson(text);
-                const normalized = normalizeTrip(parsed);
-                onReplaceTrip(normalized);
-                setImportError(null);
-              } catch (err) {
-                setImportError(err instanceof Error ? err.message : "Failed to load JSON.");
-              }
-            }}
-          />
-          {importError ? (
-            <div className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-2 text-xs text-rose-900">
-              {importError}
-            </div>
-          ) : (
-            <div className="mt-2 text-[11px] text-zinc-500">
-              JSON includes all places, routes/stops, day overrides, day trips, and time blocks.
-            </div>
-          )}
-        </div>
-
-        <div className="rounded-md border border-zinc-200 p-3">
           <div className="text-sm font-semibold">Trip window</div>
           <div className="mt-2 grid grid-cols-2 gap-3">
             <label className="flex flex-col gap-1">
@@ -390,6 +333,63 @@ export function ControlsPane({
               />
             </label>
           </div>
+        </div>
+
+        <div className="rounded-md border border-zinc-200 p-3">
+          <div className="text-sm font-semibold">Save / Load</div>
+          <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <button
+              type="button"
+              className="rounded-md bg-zinc-900 px-3 py-2 text-sm text-white hover:bg-zinc-800"
+              onClick={() => {
+                setImportError(null);
+                const text = encodeTripExportV1(trip);
+                downloadTextFile({ filename: makeTripExportFilename(trip), text });
+              }}
+            >
+              Download JSON
+            </button>
+            <button
+              type="button"
+              className="rounded-md border border-zinc-200 px-3 py-2 text-sm hover:bg-zinc-50"
+              onClick={() => {
+                setImportError(null);
+                fileRef.current?.click();
+              }}
+            >
+              Load JSON
+            </button>
+          </div>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={async (e) => {
+              const f = e.target.files?.[0];
+              // Allow re-selecting the same file after a load.
+              e.currentTarget.value = "";
+              if (!f) return;
+              try {
+                const text = await f.text();
+                const parsed = decodeTripJson(text);
+                const normalized = normalizeTrip(parsed);
+                onReplaceTrip(normalized);
+                setImportError(null);
+              } catch (err) {
+                setImportError(err instanceof Error ? err.message : "Failed to load JSON.");
+              }
+            }}
+          />
+          {importError ? (
+            <div className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-2 text-xs text-rose-900">
+              {importError}
+            </div>
+          ) : (
+            <div className="mt-2 text-[11px] text-zinc-500">
+              JSON includes all places, routes/stops, day overrides, day trips, and time blocks.
+            </div>
+          )}
         </div>
 
         <div className="text-xs text-zinc-500">
