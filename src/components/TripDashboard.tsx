@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useJsApiLoader } from "@react-google-maps/api";
 
 import { makeDefaultTrip } from "@/lib/defaultTrip";
-import { decodeShareStateV1, encodeShareStateV1 } from "@/lib/share";
+import { decodeShareStateV1 } from "@/lib/share";
 import { clearTripLocalStorage, loadTripFromLocalStorage, saveTripToLocalStorage } from "@/lib/storage";
 import { computeItinerary } from "@/lib/scheduler";
 import { normalizeDirectionsResponse } from "@/lib/directions";
@@ -96,22 +96,28 @@ function buildSegmentSpecs(trip: Trip, scenario: Scenario): SegmentSpec[] {
   }
 
   const anchors = scenario.anchorPlaceIds.filter((id) => id !== routeOrigin && id !== returnTo);
-  const lastAnchor = anchors.length > 0 ? anchors[anchors.length - 1] : undefined;
+  const annapolisId = anchors[0];
+  const lakeHouseId = anchors.length > 1 ? anchors[anchors.length - 1] : undefined;
 
-  // Outbound: routeOrigin -> ...intermediates... -> ...anchors... -> lastAnchor
-  if (lastAnchor && routeOrigin && lastAnchor !== routeOrigin) {
-    const outboundWaypoints = [...scenario.intermediateStopPlaceIds, ...anchors.slice(0, -1)].filter(
-      (id) => id !== routeOrigin && id !== lastAnchor && Boolean(trip.placesById[id]),
+  // Main drive up (green): routeOrigin -> ...intermediates... -> Annapolis
+  if (annapolisId && routeOrigin && annapolisId !== routeOrigin) {
+    const outboundWaypoints = [...scenario.intermediateStopPlaceIds].filter(
+      (id) => id !== routeOrigin && id !== annapolisId && Boolean(trip.placesById[id]),
     );
-    specs.push({ ids: [routeOrigin, ...outboundWaypoints, lastAnchor], kind: "up" });
+    specs.push({ ids: [routeOrigin, ...outboundWaypoints, annapolisId], kind: "up" });
   }
 
-  // Return: lastAnchor -> returnTo (Houston)
-  if (lastAnchor && returnTo && lastAnchor !== returnTo) {
+  // Separate event (black): Annapolis -> Lake House
+  if (annapolisId && lakeHouseId && annapolisId !== lakeHouseId) {
+    specs.push({ ids: [annapolisId, lakeHouseId], kind: "other" });
+  }
+
+  // Return home (orange): Lake House -> returnTo (Houston)
+  if (lakeHouseId && returnTo && lakeHouseId !== returnTo) {
     const returnStops = (scenario.returnStopPlaceIds ?? []).filter(
-      (id) => id !== lastAnchor && id !== returnTo && Boolean(trip.placesById[id]),
+      (id) => id !== lakeHouseId && id !== returnTo && Boolean(trip.placesById[id]),
     );
-    specs.push({ ids: [lastAnchor, ...returnStops, returnTo], kind: "home" });
+    specs.push({ ids: [lakeHouseId, ...returnStops, returnTo], kind: "home" });
   }
 
   // Filter out any invalid ids.
@@ -304,7 +310,12 @@ export function TripDashboard() {
 
             responses.push(result);
             kinds.push(spec.kind);
-            allLegs.push(...normalizeDirectionsResponse(seg, result));
+            allLegs.push(
+              ...normalizeDirectionsResponse(seg, result).map((l) => ({
+                ...l,
+                kind: spec.kind,
+              })),
+            );
             runSegment(segIdx + 1);
           },
         );
@@ -426,13 +437,7 @@ export function TripDashboard() {
     }
   }, [itinerary.days, selectedDayISO, trip.startDateISO]);
 
-  const shareUrl = useMemo(() => {
-    if (!mounted) return "";
-    const s = encodeShareStateV1(trip);
-    const u = new URL(window.location.href);
-    u.searchParams.set("s", s);
-    return u.toString();
-  }, [mounted, trip]);
+  // Share is intentionally hidden for now while the trip model is evolving.
 
   return (
     <>
@@ -457,7 +462,6 @@ export function TripDashboard() {
             }
             setTrip(makeDefaultTrip());
           }}
-          shareUrl={shareUrl}
         />
 
         <MapView

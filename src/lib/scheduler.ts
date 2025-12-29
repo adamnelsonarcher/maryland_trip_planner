@@ -1,5 +1,6 @@
 import type {
   DayItinerary,
+  LegKind,
   NormalizedDirectionsLeg,
   Scenario,
   ScheduledLeg,
@@ -10,7 +11,7 @@ import { addDays, diffDaysInclusive, makeLocalDateTime } from "@/lib/time";
 export type ComputeItineraryInput = {
   trip: Trip;
   scenario: Scenario;
-  legs: NormalizedDirectionsLeg[];
+  legs: (NormalizedDirectionsLeg & { kind?: LegKind })[];
   dayTripsByISO?: Record<
     string,
     {
@@ -34,16 +35,7 @@ function nextMidnight(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1, 0, 0, 0, 0);
 }
 
-function findLastAnchorId(scenario: Scenario): string | undefined {
-  return scenario.anchorPlaceIds.length > 0 ? scenario.anchorPlaceIds[scenario.anchorPlaceIds.length - 1] : undefined;
-}
-
-function findReturnStartIndex(legs: NormalizedDirectionsLeg[], scenario: Scenario): number {
-  const lastAnchorId = findLastAnchorId(scenario);
-  if (!lastAnchorId) return Math.max(0, legs.length - 1);
-  const idx = legs.findIndex((l) => l.fromPlaceId === lastAnchorId);
-  return idx >= 0 ? idx : Math.max(0, legs.length - 1);
-}
+// (legacy) return start inference used to exist here; now we rely on explicit leg kinds.
 
 function isRestDay(scenario: Scenario, dayISO: string) {
   return scenario.dayOverridesByISO?.[dayISO]?.mode === "rest";
@@ -68,7 +60,7 @@ function scheduleOneLegMidnightSplit(params: {
   days: DayItinerary[];
   scenario: Scenario;
   depart: Date;
-  leg: NormalizedDirectionsLeg;
+  leg: NormalizedDirectionsLeg & { kind?: LegKind };
   bufferSec: number;
   kind: "up" | "home" | "other";
 }): { departAfter: Date; spills: boolean } {
@@ -99,7 +91,7 @@ function scheduleOneLegMidnightSplit(params: {
       arriveAtISO: chunkEnd.toISOString(),
       dayISO,
       bufferSec: isFinal ? bufferSec : 0,
-      kind,
+      kind: (leg.kind ?? kind),
       arrivesAtDestination: isFinal,
     };
 
@@ -165,7 +157,7 @@ function scheduleLegsForward(params: {
   days: DayItinerary[];
   startDayIdx: number;
   startDepart?: Date;
-  legs: NormalizedDirectionsLeg[];
+  legs: (NormalizedDirectionsLeg & { kind?: LegKind })[];
   bufferSec: number;
   kind: "up" | "home" | "other";
 }): { endDayIdx: number; spills: boolean } {
@@ -226,10 +218,9 @@ export function computeItinerary({
 
   let spillsBeyondEndDate = false;
 
-  // 1) Split legs into outbound vs return segment (starting from last anchor).
-  const returnStartIdx = findReturnStartIndex(legs, scenario);
-  const outboundLegs = legs.slice(0, returnStartIdx);
-  const returnLegs = legs.slice(returnStartIdx);
+  // 1) Use explicit kinds (up/home/other) to separate return-home legs from everything else.
+  const preHomeLegs = legs.filter((l) => l.kind !== "home");
+  const returnLegs = legs.filter((l) => l.kind === "home");
 
   // 2) Apply origin stay days at the beginning as "unspecified/stay" days.
   const dayIdx = 0;
@@ -240,7 +231,7 @@ export function computeItinerary({
     scenario,
     days,
     startDayIdx: Math.min(dayIdx, days.length - 1),
-    legs: outboundLegs,
+    legs: preHomeLegs,
     bufferSec,
     kind: "up",
   });
@@ -326,6 +317,7 @@ export function computeItinerary({
               arrivesAtDestination: true,
               eventType: "dwell",
               label: `Time at ${trip.placesById[dt.destinationPlaceId]?.name ?? "stop"}`,
+              dwellSource: { type: "dayTrip" },
             };
             pushChunk(days, dwellDayISO, dwell);
             depart = dwellEnd;
@@ -358,6 +350,7 @@ export function computeItinerary({
         arrivesAtDestination: true,
         eventType: "dwell",
         label: b.label ?? `Time at ${trip.placesById[b.placeId]?.name ?? "stop"}`,
+        dwellSource: { type: "dwellBlock", blockId: b.id },
       };
       pushChunk(days, dayISO, dwell);
       t = end;

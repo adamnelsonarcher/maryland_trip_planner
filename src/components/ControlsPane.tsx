@@ -4,7 +4,7 @@ import type { Place, Scenario, Trip } from "@/types/trip";
 import { ScenarioSelector } from "@/components/ScenarioSelector";
 import { StopsList } from "@/components/StopsList";
 import { PlaceSearchBox } from "@/components/PlaceSearchBox";
-import { addDays, diffDaysInclusive, formatDateShort } from "@/lib/time";
+import { formatDateShort } from "@/lib/time";
 
 type Props = {
   trip: Trip;
@@ -12,7 +12,6 @@ type Props = {
   isMapsLoaded: boolean;
   mapsApiKeyPresent: boolean;
   directionsStatus: string;
-  shareUrl: string;
   onSetActiveScenario: (id: string) => void;
   onUpdateScenario: (patch: Partial<Scenario>) => void;
   onUpdateTrip: (patch: Partial<Trip>) => void;
@@ -26,15 +25,16 @@ export function ControlsPane({
   isMapsLoaded,
   mapsApiKeyPresent,
   directionsStatus,
-  shareUrl,
   onSetActiveScenario,
   onUpdateScenario,
   onUpdateTrip,
   onUpsertPlace,
   onReset,
 }: Props) {
-  const dayCount = diffDaysInclusive(trip.startDateISO, trip.endDateISO);
-  const dayOptions = Array.from({ length: dayCount }, (_, i) => addDays(trip.startDateISO, i));
+  const dayTripDates = Object.entries(scenario.dayOverridesByISO ?? {})
+    .filter(([, o]) => Boolean(o.dayTrip))
+    .map(([dayISO, o]) => ({ dayISO, preset: o.dayTrip!.preset }))
+    .sort((a, b) => a.dayISO.localeCompare(b.dayISO));
 
   return (
     <aside className="border-r border-zinc-200 bg-white h-full overflow-y-auto">
@@ -160,58 +160,22 @@ export function ControlsPane({
         </div>
 
         <div className="rounded-md border border-zinc-200 p-3">
-          <div className="text-sm font-semibold">Optional day trips (phase 5)</div>
-          <div className="mt-2 space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={Boolean(scenario.includeNYCDayTrip)}
-                  onChange={(e) => onUpdateScenario({ includeNYCDayTrip: e.target.checked })}
-                />
-                NYC day trip
-              </label>
-              <select
-                className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-sm disabled:bg-zinc-50"
-                disabled={!scenario.includeNYCDayTrip}
-                value={scenario.nycDayISO ?? trip.startDateISO}
-                onChange={(e) => onUpdateScenario({ nycDayISO: e.target.value })}
-              >
-                {dayOptions.map((d) => (
-                  <option key={d} value={d}>
-                    {formatDateShort(d)}
-                  </option>
-                ))}
-              </select>
+          <div className="text-sm font-semibold">Day trips</div>
+          {dayTripDates.length === 0 ? (
+            <div className="mt-2 text-sm text-zinc-500">None added yet.</div>
+          ) : (
+            <div className="mt-2 space-y-2">
+              {dayTripDates.map((d) => (
+                <div key={d.dayISO} className="flex items-center justify-between gap-3 rounded-md bg-zinc-50 px-2 py-2">
+                  <div className="text-sm font-medium">{formatDateShort(d.dayISO)}</div>
+                  <div className="text-xs text-zinc-600">
+                    {d.preset === "NYC" ? "NYC" : d.preset === "PA" ? "PA" : "Custom"}
+                  </div>
+                </div>
+              ))}
             </div>
-
-            <div className="flex items-center justify-between gap-3">
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={Boolean(scenario.includePADayTrip)}
-                  onChange={(e) => onUpdateScenario({ includePADayTrip: e.target.checked })}
-                />
-                PA day trip
-              </label>
-              <select
-                className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-sm disabled:bg-zinc-50"
-                disabled={!scenario.includePADayTrip}
-                value={scenario.paDayISO ?? trip.startDateISO}
-                onChange={(e) => onUpdateScenario({ paDayISO: e.target.value })}
-              >
-                {dayOptions.map((d) => (
-                  <option key={d} value={d}>
-                    {formatDateShort(d)}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="text-xs text-zinc-500">
-              These toggles are saved/shared, but v1 scheduling does not insert day-trip loops yet.
-            </div>
-          </div>
+          )}
+          <div className="mt-2 text-xs text-zinc-500">Add/edit day trips from the Day view.</div>
         </div>
 
         <div className="rounded-md border border-zinc-200 p-3">
@@ -235,36 +199,6 @@ export function ControlsPane({
                 }
               />
             </label>
-          </div>
-        </div>
-
-        <div className="rounded-md border border-zinc-200 p-3">
-          <div className="text-sm font-semibold">Share</div>
-          <div className="mt-2 flex gap-2">
-            <button
-              className="rounded-md bg-zinc-900 px-3 py-2 text-sm text-white hover:bg-zinc-800 disabled:bg-zinc-300"
-              disabled={!shareUrl}
-              onClick={async () => {
-                await navigator.clipboard.writeText(shareUrl);
-              }}
-              title="Copy a link encoding the current trip state"
-            >
-              Copy share link
-            </button>
-            <a
-              className="rounded-md border border-zinc-200 px-3 py-2 text-sm hover:bg-zinc-50"
-              href={shareUrl || "#"}
-              target="_blank"
-              rel="noreferrer"
-              onClick={(e) => {
-                if (!shareUrl) e.preventDefault();
-              }}
-            >
-              Open link
-            </a>
-          </div>
-          <div className="mt-2 text-xs text-zinc-500">
-            State is saved locally and can also be shared via a compressed URL param.
           </div>
         </div>
 

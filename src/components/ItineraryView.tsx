@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import type { DayItinerary, DayTripPreset, DwellBlock, PresetDayTrip, Scenario, Trip } from "@/types/trip";
 import { DayCard } from "@/components/DayCard";
@@ -9,6 +9,9 @@ import { formatDateShort } from "@/lib/time";
 import { computeBasePlaceByDay } from "@/lib/baseByDay";
 import { nanoid } from "nanoid";
 import { PlaceSearchBox } from "@/components/PlaceSearchBox";
+import type { Place, ScheduledLeg } from "@/types/trip";
+import { EditMinutesModal } from "@/components/EditMinutesModal";
+import { AddEventModal } from "@/components/AddEventModal";
 
 type Props = {
   trip: Trip;
@@ -21,7 +24,7 @@ type Props = {
   onChangeSelectedDayISO: (dayISO: string) => void;
   onLegClick?: (leg: DayItinerary["legs"][number]) => void;
   isMapsLoaded: boolean;
-  onUpsertPlace: (place: import("@/types/trip").Place) => void;
+  onUpsertPlace: (place: Place) => void;
 };
 
 export function ItineraryView({
@@ -37,6 +40,17 @@ export function ItineraryView({
   isMapsLoaded,
   onUpsertPlace,
 }: Props) {
+  const [editOpen, setEditOpen] = useState(false);
+  const [editTitle, setEditTitle] = useState("");
+  const [editMinutes, setEditMinutes] = useState(0);
+  const [editTarget, setEditTarget] = useState<
+    | { type: "dayTrip"; dayISO: string }
+    | { type: "dwellBlock"; dayISO: string; blockId: string }
+    | null
+  >(null);
+
+  const [addOpen, setAddOpen] = useState(false);
+  const [addDayISO, setAddDayISO] = useState<string | null>(null);
   const selectedDay = useMemo(
     () => itinerary.find((d) => d.dayISO === selectedDayISO) ?? itinerary[0],
     [itinerary, selectedDayISO],
@@ -75,9 +89,34 @@ export function ItineraryView({
     return Array.from(uniq.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [trip.placesById]);
 
+  const openEditForDwell = (dayISO: string, leg: ScheduledLeg) => {
+    if (leg.dwellSource?.type === "dayTrip") {
+      setEditTarget({ type: "dayTrip", dayISO });
+      setEditTitle(leg.label ?? "Time spent");
+      setEditMinutes(Math.round((leg.durationSec ?? 0) / 60));
+      setEditOpen(true);
+      return;
+    }
+    if (leg.dwellSource?.type === "dwellBlock") {
+      setEditTarget({ type: "dwellBlock", dayISO, blockId: leg.dwellSource.blockId });
+      setEditTitle(leg.label ?? "Time spent");
+      setEditMinutes(Math.round((leg.durationSec ?? 0) / 60));
+      setEditOpen(true);
+      return;
+    }
+  };
+
+  const openAddAtDay = (dayISO: string) => {
+    setAddDayISO(dayISO);
+    setAddOpen(true);
+  };
+
+  const addBaseName = addDayISO ? trip.placesById[baseByDay[addDayISO] ?? ""]?.name ?? null : null;
+
   return (
-    <aside className="border-l border-zinc-200 bg-white h-full overflow-y-auto">
-      <div className="p-4">
+    <>
+      <aside className="border-l border-zinc-200 bg-white h-full overflow-y-auto">
+        <div className="p-4">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="text-sm text-zinc-500">Itinerary</div>
@@ -384,6 +423,8 @@ export function ItineraryView({
                     onChangeView("day");
                   }}
                   onLegClick={onLegClick}
+                  onDwellClick={(leg) => openEditForDwell(day.dayISO, leg as ScheduledLeg)}
+                  onInsertBetween={() => openAddAtDay(day.dayISO)}
                 />
               );
             })
@@ -404,12 +445,82 @@ export function ItineraryView({
                 onChangeView("day");
               }}
               onLegClick={onLegClick}
+              onDwellClick={(leg) => openEditForDwell(selectedDayISO, leg as ScheduledLeg)}
+              onInsertBetween={() => openAddAtDay(selectedDayISO)}
             />
           ) : null}
         </div>
-      </div>
-    </aside>
+        </div>
+      </aside>
+
+      <EditMinutesModal
+        open={editOpen}
+        title={editTitle}
+        minutes={editMinutes}
+        onClose={() => setEditOpen(false)}
+        onSave={(m) => {
+          if (!editTarget) return;
+          const nextOverrides = { ...(scenario.dayOverridesByISO ?? {}) };
+          const existing = nextOverrides[editTarget.dayISO] ?? { mode: "auto" as const, dwellBlocks: [] as DwellBlock[] };
+
+          if (editTarget.type === "dayTrip") {
+            if (!existing.dayTrip) return;
+            nextOverrides[editTarget.dayISO] = {
+              ...existing,
+              dayTrip: { ...existing.dayTrip, dwellMinutes: Math.max(0, m) },
+            };
+          } else {
+            const blocks = (existing.dwellBlocks ?? []).map((b) =>
+              b.id === editTarget.blockId ? { ...b, minutes: Math.max(0, m) } : b,
+            );
+            nextOverrides[editTarget.dayISO] = { ...existing, dwellBlocks: blocks };
+          }
+
+          onUpdateScenario({ dayOverridesByISO: nextOverrides });
+        }}
+      />
+
+      <AddEventModal
+        open={addOpen}
+        isMapsLoaded={isMapsLoaded}
+        dayISO={addDayISO}
+        basePlaceName={addBaseName}
+        onClose={() => setAddOpen(false)}
+        onAddDrive={() => {
+          if (!addDayISO) return;
+          onChangeSelectedDayISO(addDayISO);
+          onChangeView("day");
+          const nextOverrides = { ...(scenario.dayOverridesByISO ?? {}) };
+          const existing = nextOverrides[addDayISO] ?? { mode: "auto" as const, dwellBlocks: [] as DwellBlock[] };
+          nextOverrides[addDayISO] = {
+            ...existing,
+            dayTrip: existing.dayTrip ?? { preset: "CUSTOM" as const, dwellMinutes: 120 },
+          };
+          onUpdateScenario({ dayOverridesByISO: nextOverrides });
+        }}
+        onAddTimeAtBase={(template) => {
+          if (!addDayISO) return;
+          const baseId = baseByDay[addDayISO];
+          if (!baseId) return;
+          const nextOverrides = { ...(scenario.dayOverridesByISO ?? {}) };
+          const existing = nextOverrides[addDayISO] ?? { mode: "auto" as const, dwellBlocks: [] as DwellBlock[] };
+          const block: DwellBlock = { ...template, placeId: baseId };
+          nextOverrides[addDayISO] = { ...existing, dwellBlocks: [...(existing.dwellBlocks ?? []), block] };
+          onUpdateScenario({ dayOverridesByISO: nextOverrides });
+        }}
+        onAddTimeAtPlace={(place, minutes) => {
+          if (!addDayISO) return;
+          onUpsertPlace(place);
+          const nextOverrides = { ...(scenario.dayOverridesByISO ?? {}) };
+          const existing = nextOverrides[addDayISO] ?? { mode: "auto" as const, dwellBlocks: [] as DwellBlock[] };
+          const block: DwellBlock = { id: nanoid(), placeId: place.id, minutes, label: `Time at ${place.name}` };
+          nextOverrides[addDayISO] = { ...existing, dwellBlocks: [...(existing.dwellBlocks ?? []), block] };
+          onUpdateScenario({ dayOverridesByISO: nextOverrides });
+        }}
+      />
+    </>
   );
 }
+
 
 

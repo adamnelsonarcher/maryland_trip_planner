@@ -95,6 +95,7 @@ export type ScheduledLeg = NormalizedDirectionsLeg & {
   arrivesAtDestination?: boolean;
   eventType?: "drive" | "dwell";
   label?: string;
+  dwellSource?: { type: "dayTrip" } | { type: "dwellBlock"; blockId: string };
 };
 
 export type DayItinerary = {

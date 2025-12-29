@@ -15,10 +15,20 @@ type Props = {
   day: DayItinerary;
   onSelectDay?: (dayISO: string) => void;
   onLegClick?: (leg: DayItinerary["legs"][number]) => void;
+  onDwellClick?: (leg: DayItinerary["legs"][number]) => void;
+  onInsertBetween?: (dayISO: string, index: number) => void; // index in day.legs to insert before
   dayTripLabel?: string | null;
 };
 
-export function DayCard({ trip, day, onSelectDay, onLegClick, dayTripLabel }: Props) {
+export function DayCard({
+  trip,
+  day,
+  onSelectDay,
+  onLegClick,
+  onDwellClick,
+  onInsertBetween,
+  dayTripLabel,
+}: Props) {
   return (
     <button
       type="button"
@@ -51,7 +61,20 @@ export function DayCard({ trip, day, onSelectDay, onLegClick, dayTripLabel }: Pr
       ) : null}
 
       {day.legs.length === 0 ? (
-        <div className="mt-3 text-sm text-zinc-500">No driving scheduled.</div>
+        <div className="mt-3">
+          <div className="text-sm text-zinc-500">No driving scheduled.</div>
+          <div
+            className="mt-3 group rounded-md border border-dashed border-zinc-300 px-2 py-3 text-center text-sm text-zinc-500 hover:bg-zinc-100"
+            onClick={(e) => {
+              e.stopPropagation();
+              onInsertBetween?.(day.dayISO, 0);
+            }}
+            role="button"
+            tabIndex={0}
+          >
+            <span className="opacity-0 group-hover:opacity-100 transition-opacity">＋ Add</span>
+          </div>
+        </div>
       ) : (
         <div className="mt-3 flex flex-col gap-2">
           {day.legs.map((leg, idx) => {
@@ -67,30 +90,58 @@ export function DayCard({ trip, day, onSelectDay, onLegClick, dayTripLabel }: Pr
                   : "border-l-4 border-zinc-900";
             const isDwell = leg.eventType === "dwell";
             return (
-              <div
-                key={`${leg.fromPlaceId}-${leg.toPlaceId}-${idx}`}
-                className={`rounded-md bg-zinc-50 p-2 ${color} cursor-pointer hover:bg-zinc-100`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (!isDwell) onLegClick?.(leg);
-                }}
-                role="button"
-                tabIndex={0}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium">
-                      {isDwell ? leg.label ?? `Time at ${to}` : `${from} → ${to}`}
-                    </div>
-                    <div className="text-xs text-zinc-500">
-                      {formatTimeShort(depart)} → {formatTimeShort(arrive)}
-                      {isDwell ? "" : ` • ${fmtDuration(leg.durationSec)}`}
+              <div key={`${leg.fromPlaceId}-${leg.toPlaceId}-${idx}`} className="flex flex-col gap-2">
+                {idx > 0 ? (
+                  <div
+                    className="group rounded-md border border-dashed border-zinc-300 px-2 py-2 text-center text-sm text-zinc-500 hover:bg-zinc-100"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onInsertBetween?.(day.dayISO, idx);
+                    }}
+                    role="button"
+                    tabIndex={0}
+                  >
+                    <span className="opacity-0 group-hover:opacity-100 transition-opacity">＋</span>
+                  </div>
+                ) : null}
+
+                <div
+                  className={`rounded-md bg-zinc-50 p-2 ${color} cursor-pointer hover:bg-zinc-100`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (isDwell) onDwellClick?.(leg);
+                    else onLegClick?.(leg);
+                  }}
+                  role="button"
+                  tabIndex={0}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium">
+                        {isDwell ? leg.label ?? `Time at ${to}` : `${from} → ${to}`}
+                      </div>
+                      <div className="text-xs text-zinc-500">
+                        {formatTimeShort(depart)} → {formatTimeShort(arrive)}
+                        {isDwell ? "" : ` • ${fmtDuration(leg.durationSec)}`}
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
             );
           })}
+
+          <div
+            className="group rounded-md border border-dashed border-zinc-300 px-2 py-2 text-center text-sm text-zinc-500 hover:bg-zinc-100"
+            onClick={(e) => {
+              e.stopPropagation();
+              onInsertBetween?.(day.dayISO, day.legs.length);
+            }}
+            role="button"
+            tabIndex={0}
+          >
+            <span className="opacity-0 group-hover:opacity-100 transition-opacity">＋</span>
+          </div>
         </div>
       )}
     </button>
